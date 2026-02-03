@@ -1,0 +1,5 @@
+.venv/
+.env
+data/board.json
+data/preview_cache.json
+__pycache__/
