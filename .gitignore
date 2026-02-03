@@ -3,3 +3,4 @@
 data/board.json
 data/preview_cache.json
 __pycache__/
+.env
