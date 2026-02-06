@@ -1,0 +1,1095 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Content Style Board</title>
+    <style>
+      body {
+        margin: 0;
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial;
+        background: #f6f6fb;
+        height: 100vh;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+      }
+      header {
+        padding: 14px 16px;
+        background: white;
+        border-bottom: 1px solid #e6e6ef;
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        flex-wrap: wrap;
+       }
+      input { flex: 1; padding: 10px 12px; border: 1px solid #e6e6ef; border-radius: 10px; }
+      #nicheInput, #seedInput {
+        flex: 0 1 320px;
+        min-width: 220px;
+      }
+
+      header strong {
+        flex: 0 0 auto;
+      }
+      button { padding: 10px 12px; border: 1px solid #e6e6ef; background: white; border-radius: 10px; cursor: pointer; }
+      main {
+        flex: 1;
+        padding: 0; /* let the canvas fill the space */
+        min-height: 0; /* allows children to size correctly in a flex column layout */
+      }
+
+      /* Viewport (the visible window under the header) */
+      .board {
+        position: relative;
+        height: 100%;
+        width: 100%;
+        overflow: hidden; /* we pan/zoom instead of scrolling */
+        background: #f7f8fc;
+        user-select: none;
+        cursor: grab;
+      }
+
+      /* The infinite canvas layer that moves/zooms */
+      .canvas {
+        position: absolute;
+        inset: 0;
+        transform-origin: 0 0;
+        /* faint dot grid like poppy */
+        background-color: #f7f8fc;
+        background-image: radial-gradient(rgba(17, 17, 17, 0.10) 1px, transparent 1px);
+        background-size: 22px 22px;
+        background-position: 0 0;
+      }
+
+      /* Resize handles */
+      .resize-handle {
+        position: absolute;
+        width: 10px;
+        height: 10px;
+        background: rgba(180, 35, 90, 0.15);
+        border: 1px solid rgba(180, 35, 90, 0.35);
+        border-radius: 3px;
+        z-index: 10;
+      }
+      .resize-handle:hover {
+        background: rgba(180, 35, 90, 0.25);
+      }
+      .rh-nw { top: -5px; left: -5px; cursor: nwse-resize; }
+      .rh-ne { top: -5px; right: -5px; cursor: nesw-resize; }
+      .rh-sw { bottom: -5px; left: -5px; cursor: nesw-resize; }
+      .rh-se { bottom: -5px; right: -5px; cursor: nwse-resize; }
+      .rh-n  { top: -5px; left: 50%; transform: translateX(-50%); cursor: ns-resize; }
+      .rh-s  { bottom: -5px; left: 50%; transform: translateX(-50%); cursor: ns-resize; }
+      .rh-w  { left: -5px; top: 50%; transform: translateY(-50%); cursor: ew-resize; }
+      .rh-e  { right: -5px; top: 50%; transform: translateY(-50%); cursor: ew-resize; }
+      select {
+        padding: 10px 12px;
+        border: 1px solid #e6e6ef;
+        border-radius: 10px;
+        background: white;
+      }
+
+      /* --- Saved-card grid (Figma-style tiles) --- */
+      .group-box-body {
+        padding: 14px;
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+        gap: 14px;
+        align-items: start;
+      }
+
+      .tile {
+        position: relative;
+        display: block;
+        text-decoration: none;
+        background: transparent;
+        border: none;
+      }
+
+      .tile-top {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 8px;
+      }
+
+      .tile-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 10px;
+        border-radius: 999px;
+        border: 1px solid #f1c4d6;
+        background: #fff6fa;
+        color: #b4235a;
+        font-size: 12px;
+        line-height: 1;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 100%;
+      }
+
+      .tile-pill .ig-dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 3px;
+        background: #ff4da6;
+        flex: 0 0 auto;
+      }
+
+      .tile-actions {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        flex: 0 0 auto;
+      }
+
+      .icon-btn {
+        width: 26px;
+        height: 26px;
+        border-radius: 8px;
+        border: 1px solid #f1c4d6;
+        background: #fff;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0;
+        color: #b4235a;
+      }
+
+      .icon-btn:hover {
+        background: #fff6fa;
+      }
+
+      .tile-thumb {
+        width: 100%;
+        aspect-ratio: 9 / 16;
+        border-radius: 16px;
+        overflow: hidden;
+        background: #111;
+        box-shadow: 0 10px 24px rgba(0,0,0,0.15);
+        border: 1px solid #e6e6ef;
+      }
+
+      .tile-thumb img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: block;
+      }
+
+      .tile-thumb iframe {
+        border: 0;
+        display: block;
+        background: #111;
+      }
+
+      /* Cleaner Instagram embeds (reduce extra whitespace + make it feel like a native card) */
+      .ig-embed-wrap {
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: #111;
+      }
+
+      /* Instagram's embed iframe often has extra padding; scale it slightly to fill the tile */
+      .ig-embed {
+        width: 115%;
+        height: 115%;
+        transform: scale(0.87);
+        transform-origin: 0 0;
+      }
+
+      .ig-embed-fallback {
+        width: 100%;
+        height: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #fff;
+        font-size: 12px;
+        text-align: center;
+        padding: 14px;
+        background: #111;
+      }
+
+      .tile-fallback {
+        width: 100%;
+        aspect-ratio: 9 / 16;
+        border-radius: 16px;
+        border: 1px dashed #d6d6e6;
+        background: #fbfbff;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #666;
+        font-size: 12px;
+        text-align: center;
+        padding: 10px;
+      }
+
+      /* Slightly wider boxes so the grid feels like your reference */
+      .group-box {
+        width: 520px !important;
+      }
+
+      @media (max-width: 980px) {
+        .group-box { width: 92vw !important; }
+        .group-box-body { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
+      }
+
+    </style>
+    <link rel="icon" href="data:,">
+  </head>
+  <body>
+    <header>
+  <strong>Content Style Board</strong>
+
+  <input
+    id="nicheInput"
+    type="text"
+    placeholder="Niche (e.g. fitness, real estate, amazon wholesale)"
+  />
+
+  <input
+    id="seedInput"
+    type="text"
+    placeholder="Seed account (optional, e.g. @creator)"
+  />
+
+  <select id="platformSelect">
+    <option value="instagram">Instagram</option>
+    <option value="tiktok">TikTok</option>
+    <option value="x">X</option>
+  </select>
+
+  <select id="styleSelect"></select>
+
+  <button id="searchBtn">Search</button>
+  <button id="saveBtn">Save</button>
+</header>
+
+
+    <main>
+      <div id="board" class="board">
+        <div id="canvas" class="canvas">Board loading…</div>
+      </div>
+    </main>
+    <script>
+  const boardEl = document.getElementById("board");
+  const canvasEl = document.getElementById("canvas");
+  const searchBtn = document.getElementById("searchBtn");
+  const nicheInput = document.getElementById("nicheInput");
+  const seedInput = document.getElementById("seedInput");
+
+  const STYLE_OPTIONS = {
+  instagram: [
+    { value: "carousel", label: "Carousel" },
+    { value: "multi-clip", label: "Multi-clip text reel" },
+    { value: "single-clip", label: "Single-clip text reel" },
+  ],
+  tiktok: [
+    { value: "multi-clip", label: "Multi-clip text reel" },
+    { value: "single-clip", label: "Single-clip text reel" },
+  ],
+  x: [
+    { value: "post", label: "Post (short)" },
+    { value: "thread", label: "Thread" },
+  ],
+};
+
+  let nextX = 24;
+  let nextY = 24;
+
+  // --- Infinite canvas (pan + zoom) ---
+  let viewportX = 0;
+  let viewportY = 0;
+  let viewportScale = 1;
+  const MIN_SCALE = 0.25;
+  const MAX_SCALE = 2.5;
+
+  function clamp(n, a, b) {
+    return Math.max(a, Math.min(b, n));
+  }
+
+  function applyViewport() {
+    canvasEl.style.transform = `translate(${viewportX}px, ${viewportY}px) scale(${viewportScale})`;
+  }
+
+  function clientToWorld(clientX, clientY) {
+    const rect = boardEl.getBoundingClientRect();
+    const x = (clientX - rect.left - viewportX) / viewportScale;
+    const y = (clientY - rect.top - viewportY) / viewportScale;
+    return { x, y };
+  }
+
+  function zoomAt(clientX, clientY, zoomFactor) {
+    const rect = boardEl.getBoundingClientRect();
+    const before = clientToWorld(clientX, clientY);
+
+    const nextScale = clamp(viewportScale * zoomFactor, MIN_SCALE, MAX_SCALE);
+    viewportScale = nextScale;
+
+    // keep the point under the cursor stable
+    const afterX = before.x * viewportScale + rect.left + viewportX;
+    const afterY = before.y * viewportScale + rect.top + viewportY;
+    viewportX += (clientX - afterX);
+    viewportY += (clientY - afterY);
+
+    applyViewport();
+  }
+
+
+  let isPanning = false;
+  let panStartX = 0;
+  let panStartY = 0;
+  let panOrigX = 0;
+  let panOrigY = 0;
+
+  boardEl.addEventListener("mousedown", (e) => {
+    // Left-drag on empty canvas pans. Middle mouse pans anywhere.
+    const middle = e.button === 1;
+    const left = e.button === 0;
+
+    // If left-click started inside a group box or resize handle, do NOT pan (let drag/resize happen)
+    if (left && e.target.closest && (e.target.closest(".group-box") || e.target.closest(".resize-handle"))) {
+      return;
+    }
+
+    if (!middle && !left) return;
+
+    isPanning = true;
+    boardEl.style.cursor = "grabbing";
+    panStartX = e.clientX;
+    panStartY = e.clientY;
+    panOrigX = viewportX;
+    panOrigY = viewportY;
+    e.preventDefault();
+  });
+
+  window.addEventListener("mousemove", (e) => {
+    if (!isPanning) return;
+    const dx = e.clientX - panStartX;
+    const dy = e.clientY - panStartY;
+    viewportX = panOrigX + dx;
+    viewportY = panOrigY + dy;
+    applyViewport();
+  });
+
+  window.addEventListener("mouseup", () => {
+    if (!isPanning) return;
+    isPanning = false;
+    boardEl.style.cursor = "grab";
+  });
+
+  // Wheel / trackpad:
+  // - Ctrl/Cmd + wheel = zoom
+  // - Normal wheel/2-finger scroll = pan
+  boardEl.addEventListener(
+    "wheel",
+    (e) => {
+      // Zoom
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        const direction = e.deltaY > 0 ? 0.9 : 1.1;
+        zoomAt(e.clientX, e.clientY, direction);
+        return;
+      }
+
+      // Pan (trackpad two-finger scroll)
+      e.preventDefault();
+      viewportX -= e.deltaX;
+      viewportY -= e.deltaY;
+      applyViewport();
+    },
+    { passive: false }
+  );
+
+  // Start at default viewport
+  applyViewport();
+  boardEl.style.cursor = "grab";
+
+  function makeDraggable(box, handle) {
+    let isDragging = false;
+    let startX = 0, startY = 0;
+    let origLeft = 0, origTop = 0;
+
+    handle.style.cursor = "grab";
+    boardEl.style.cursor = "grab";
+
+    handle.addEventListener("mousedown", (e) => {
+      if (isPanning) return;
+      isDragging = true;
+      handle.style.cursor = "grabbing";
+      startX = e.clientX;
+      startY = e.clientY;
+
+      const rect = box.getBoundingClientRect();
+      // Convert current screen position to world coords
+      const p = clientToWorld(rect.left, rect.top);
+      origLeft = p.x;
+      origTop = p.y;
+
+      e.preventDefault();
+    });
+
+    window.addEventListener("mousemove", (e) => {
+      if (!isDragging) return;
+      const dx = (e.clientX - startX) / viewportScale;
+      const dy = (e.clientY - startY) / viewportScale;
+      box.style.left = `${origLeft + dx}px`;
+      box.style.top = `${origTop + dy}px`;
+    });
+
+    window.addEventListener("mouseup", () => {
+      if (!isDragging) return;
+      isDragging = false;
+      handle.style.cursor = "grab";
+      boardEl.style.cursor = "grab";
+    });
+  }
+
+  function makeResizable(box) {
+    const minW = 320;
+    const minH = 220;
+
+    const handles = [
+      { cls: "resize-handle rh-nw", edge: "nw" },
+      { cls: "resize-handle rh-ne", edge: "ne" },
+      { cls: "resize-handle rh-sw", edge: "sw" },
+      { cls: "resize-handle rh-se", edge: "se" },
+      { cls: "resize-handle rh-n", edge: "n" },
+      { cls: "resize-handle rh-s", edge: "s" },
+      { cls: "resize-handle rh-w", edge: "w" },
+      { cls: "resize-handle rh-e", edge: "e" },
+    ];
+
+    for (const h of handles) {
+      const el = document.createElement("div");
+      el.className = h.cls;
+      el.dataset.edge = h.edge;
+      box.appendChild(el);
+
+      let resizing = false;
+      let startX = 0;
+      let startY = 0;
+      let startW = 0;
+      let startH = 0;
+      let startL = 0;
+      let startT = 0;
+
+      el.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        resizing = true;
+
+        startX = e.clientX;
+        startY = e.clientY;
+        startW = box.getBoundingClientRect().width;
+        startH = box.getBoundingClientRect().height;
+
+        // left/top are in world coords
+        startL = parseFloat(box.style.left || "0");
+        startT = parseFloat(box.style.top || "0");
+
+        window.addEventListener("mousemove", onMove);
+        window.addEventListener("mouseup", onUp, { once: true });
+      });
+
+      function onMove(e) {
+        if (!resizing) return;
+        const dx = (e.clientX - startX) / viewportScale;
+        const dy = (e.clientY - startY) / viewportScale;
+
+        // size math based on which handle is dragged
+        const edge = h.edge;
+        let newW = startW / viewportScale;
+        let newH = startH / viewportScale;
+        let newL = startL;
+        let newT = startT;
+
+        // startW/startH are in screen pixels; convert to world units
+        const startWWorld = startW / viewportScale;
+        const startHWorld = startH / viewportScale;
+
+        newW = startWWorld;
+        newH = startHWorld;
+
+        if (edge.includes("e")) newW = startWWorld + dx;
+        if (edge.includes("s")) newH = startHWorld + dy;
+        if (edge.includes("w")) {
+          newW = startWWorld - dx;
+          newL = startL + dx;
+        }
+        if (edge.includes("n")) {
+          newH = startHWorld - dy;
+          newT = startT + dy;
+        }
+
+        // clamp
+        if (newW < minW) {
+          if (edge.includes("w")) newL -= (minW - newW);
+          newW = minW;
+        }
+        if (newH < minH) {
+          if (edge.includes("n")) newT -= (minH - newH);
+          newH = minH;
+        }
+
+        box.style.width = `${newW}px`;
+        box.style.height = `${newH}px`;
+        box.style.left = `${newL}px`;
+        box.style.top = `${newT}px`;
+      }
+
+      function onUp() {
+        resizing = false;
+        window.removeEventListener("mousemove", onMove);
+      }
+    }
+  }
+
+  const platformSelect = document.getElementById("platformSelect");
+
+// populate once on load (so it's correct even after refresh)
+populateStylesForPlatform(platformSelect.value);
+
+// update whenever platform changes
+platformSelect.addEventListener("change", () => {
+  populateStylesForPlatform(platformSelect.value);
+});
+
+
+  function createGroupBox(query, results, id) {
+    const box = document.createElement("div");
+    box.dataset.id = id || crypto.randomUUID();
+    box.dataset.query = query;
+    box.dataset.results = JSON.stringify(results);
+    box.style.position = "absolute";
+    box.style.left = `${nextX}px`;
+    box.style.top = `${nextY}px`;
+    box.style.width = "360px";
+    box.style.background = "white";
+    box.style.border = "1px solid #e6e6ef";
+    box.style.borderRadius = "14px";
+    box.style.boxShadow = "0 12px 30px rgba(0,0,0,0.10)";
+    box.style.overflow = "hidden";
+    box.className = "group-box";
+
+    nextX += 30;
+    nextY += 20;
+    if (nextX > 400) nextX = 24;
+    if (nextY > 250) nextY = 24;
+
+    const header = document.createElement("div");
+    header.style.padding = "10px 12px";
+    header.style.background = "#fafafe";
+    header.style.borderBottom = "1px solid #e6e6ef";
+    header.style.display = "flex";
+    header.style.justifyContent = "space-between";
+    header.style.alignItems = "center";
+
+    const title = document.createElement("div");
+    title.textContent = query || "Results";
+    title.style.fontWeight = "700";
+    title.style.fontSize = "14px";
+
+    const headerRight = document.createElement("div");
+    headerRight.style.display = "inline-flex";
+    headerRight.style.alignItems = "center";
+    headerRight.style.gap = "8px";
+
+    const count = document.createElement("div");
+    count.textContent = `${results.length}`;
+    count.style.fontSize = "12px";
+    count.style.opacity = "0.7";
+    count.className = "count";
+
+    const delBoxBtn = document.createElement("button");
+    delBoxBtn.type = "button";
+    delBoxBtn.className = "icon-btn";
+    delBoxBtn.title = "Delete group";
+    delBoxBtn.innerHTML = `
+      <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+        <path d="M3 6h18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        <path d="M8 6V4h8v2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        <path d="M6 6l1 16h10l1-16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+      </svg>
+    `;
+
+    delBoxBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const ok = confirm("Delete this entire group box?");
+      if (!ok) return;
+      box.remove();
+    });
+
+    headerRight.appendChild(count);
+    headerRight.appendChild(delBoxBtn);
+
+
+    header.appendChild(title);
+    header.appendChild(headerRight);
+
+    const body = document.createElement("div");
+    body.className = "group-box-body";
+
+    for (const item of results) {
+      const url = item.url || "";
+      const tag = item.tag || item.style || "";
+      const platform = (item.platform || "unknown").toLowerCase();
+
+      const tile = document.createElement("a");
+      tile.className = "tile";
+      tile.href = url;
+      tile.target = "_blank";
+      tile.rel = "noreferrer";
+
+      // datasets for Save()
+      tile.dataset.title = item.title || url;
+      tile.dataset.platform = item.platform || "";
+      tile.dataset.tag = tag;
+      tile.dataset.description = item.description || "";
+      tile.dataset.thumbnail = item.thumbnail || "";
+
+      // Top row: pill + actions
+      const top = document.createElement("div");
+      top.className = "tile-top";
+
+      const pill = document.createElement("div");
+      pill.className = "tile-pill";
+
+      const dot = document.createElement("span");
+      dot.className = "ig-dot";
+
+      const pillText = document.createElement("span");
+      pillText.className = "tile-pill-text";
+      pillText.textContent = (item.title || url).trim();
+
+      // show dot for IG only (still fine if other platforms later)
+      if (platform === "instagram") pill.appendChild(dot);
+      pill.appendChild(pillText);
+
+      const actions = document.createElement("div");
+      actions.className = "tile-actions";
+
+      // Open (external) button
+      const openBtn = document.createElement("button");
+      openBtn.type = "button";
+      openBtn.className = "icon-btn";
+      openBtn.title = "Open";
+      openBtn.innerHTML = `
+        <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+          <path d="M14 3h7v7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <path d="M21 3l-9 9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <path d="M10 7H7a4 4 0 0 0-4 4v6a4 4 0 0 0 4 4h6a4 4 0 0 0 4-4v-3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+      `;
+
+      openBtn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (url && url.startsWith("http")) window.open(url, "_blank", "noreferrer");
+      });
+
+      // Delete button
+      const delBtn = document.createElement("button");
+      delBtn.type = "button";
+      delBtn.className = "icon-btn";
+      delBtn.title = "Delete";
+      delBtn.innerHTML = `
+        <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+          <path d="M18 6L6 18M6 6l12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+      `;
+
+      delBtn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+
+        const ok = confirm("Delete this item?");
+        if (!ok) return;
+
+        const boxEl = tile.closest(".group-box");
+        tile.remove();
+
+        if (boxEl) {
+          const remaining = boxEl.querySelectorAll(".tile").length;
+          const countEl = boxEl.querySelector(".count");
+          if (countEl) countEl.textContent = String(remaining);
+          updateBoxResultsFromDOM(boxEl);
+          if (remaining === 0) boxEl.remove();
+        }
+      });
+
+      actions.appendChild(openBtn);
+      actions.appendChild(delBtn);
+
+      top.appendChild(pill);
+      top.appendChild(actions);
+
+      // Helper for Instagram embed URLs
+      function instagramEmbedUrl(originalUrl) {
+        try {
+          const u = new URL(originalUrl);
+          // Remove query/hash for stability
+          u.search = "";
+          u.hash = "";
+
+          // If it's already an embed URL, keep it
+          if (u.pathname.includes("/embed")) {
+            return u.toString();
+          }
+
+          // Ensure trailing slash
+          if (!u.pathname.endsWith("/")) u.pathname += "/";
+
+          // Instagram supports /p/<code>/embed/ and /reel/<code>/embed/
+          return u.toString() + "embed/";
+        } catch (e) {
+          return "";
+        }
+      }
+
+      // Thumbnail / preview
+      const thumbUrl = item.thumbnail || "";
+
+      const wrap = document.createElement("div");
+      wrap.className = "tile-thumb";
+
+      // If this is an Instagram link, prefer the official embed iframe.
+      // This matches tools like poppy.ai (slide navigation works inside the card).
+      const isInstagram = platform === "instagram" && url && url.includes("instagram.com");
+      const igEmbed = isInstagram ? instagramEmbedUrl(url) : "";
+
+      if (igEmbed) {
+        const embedWrap = document.createElement("div");
+        embedWrap.className = "ig-embed-wrap";
+
+        const iframe = document.createElement("iframe");
+        iframe.className = "ig-embed";
+        iframe.src = igEmbed;
+        iframe.loading = "lazy";
+        iframe.setAttribute("title", (item.title || "Instagram embed").trim());
+        iframe.setAttribute(
+          "sandbox",
+          "allow-scripts allow-same-origin allow-popups allow-forms allow-top-navigation-by-user-activation"
+        );
+        iframe.setAttribute("allow", "encrypted-media; fullscreen; picture-in-picture");
+        iframe.setAttribute("referrerpolicy", "origin-when-cross-origin");
+        iframe.setAttribute("scrolling", "no");
+
+        // If Instagram blocks the embed (private/removed/age-gated), the iframe can fail.
+        // We can’t reliably read the iframe DOM (cross-origin), but we *can* fall back when
+        // the iframe errors.
+        iframe.addEventListener(
+          "error",
+          () => {
+            embedWrap.innerHTML = "";
+            const fb = document.createElement("div");
+            fb.className = "ig-embed-fallback";
+            fb.innerHTML = "Preview unavailable (Instagram blocked the embed).<br/>Use the open button to view it on Instagram.";
+            embedWrap.appendChild(fb);
+          },
+          { once: true }
+        );
+
+        embedWrap.appendChild(iframe);
+        wrap.appendChild(embedWrap);
+      } else {
+        const img = document.createElement("img");
+        img.alt = (item.title || "").trim();
+        img.loading = "lazy";
+
+        // Start with Brave thumbnail if present (proxy it through our backend to avoid hotlink/CORS blocks)
+        if (thumbUrl) {
+          img.src = `/api/proxy?url=${encodeURIComponent(thumbUrl)}`;
+        } else {
+          // temporary placeholder (so layout is stable)
+          img.src = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='540' height='960'%3E%3Crect width='100%25' height='100%25' fill='%23111'/%3E%3Ctext x='50%25' y='50%25' dominant-baseline='middle' text-anchor='middle' fill='%23fff' font-family='Arial' font-size='28'%3ELoading preview%E2%80%A6%3C/text%3E%3C/svg%3E";
+
+          // Ask our backend to unfurl OG/Twitter image (iMessage-style)
+          // This avoids CORS because the server fetches the page.
+          (async () => {
+            try {
+              const u = encodeURIComponent(url);
+              const res = await fetch(`/api/unfurl?url=${u}`);
+              const data = await res.json();
+              if (res.ok && data.ok && data.image) {
+                // Proxy the OG image too (prevents 403/blocked images)
+                img.src = `/api/proxy?url=${encodeURIComponent(data.image)}`;
+
+                // Persist the *original* image URL so Save() keeps it (we proxy on render)
+                tile.dataset.thumbnail = data.image;
+                const boxEl = tile.closest(".group-box");
+                if (boxEl) updateBoxResultsFromDOM(boxEl);
+              } else {
+                // If unfurl returns no image, keep a simple placeholder message
+                img.src = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='540' height='960'%3E%3Crect width='100%25' height='100%25' fill='%23111'/%3E%3Ctext x='50%25' y='50%25' dominant-baseline='middle' text-anchor='middle' fill='%23fff' font-family='Arial' font-size='28'%3ENo preview%3C/text%3E%3C/svg%3E";
+              }
+            } catch (e) {
+              // leave placeholder
+            }
+          })();
+        }
+
+        img.addEventListener(
+          "error",
+          () => {
+            img.src = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='540' height='960'%3E%3Crect width='100%25' height='100%25' fill='%23111'/%3E%3Ctext x='50%25' y='50%25' dominant-baseline='middle' text-anchor='middle' fill='%23fff' font-family='Arial' font-size='24'%3EPreview blocked%3C/text%3E%3C/svg%3E";
+          },
+          { once: true }
+        );
+
+        wrap.appendChild(img);
+      }
+      tile.appendChild(top);
+      tile.appendChild(wrap);
+      body.appendChild(tile);
+
+      // Click-to-edit (keeps your current behavior)
+      tile.addEventListener("dblclick", (e) => {
+        if (e.metaKey || e.ctrlKey) return;
+        e.preventDefault();
+
+        const currentTitle = tile.dataset.title || "";
+        const currentUrl = tile.getAttribute("href") || "";
+
+        const newTitle = prompt("Edit title:", currentTitle);
+        if (newTitle === null) return;
+
+        const newUrl = prompt("Edit URL:", currentUrl);
+        if (newUrl === null) return;
+
+        if (!newUrl.startsWith("http")) {
+          alert("URL must start with http:// or https://");
+          return;
+        }
+
+        tile.dataset.title = newTitle.trim();
+        tile.setAttribute("href", newUrl.trim());
+
+        const pillTextEl = tile.querySelector(".tile-pill-text");
+        if (pillTextEl) pillTextEl.textContent = newTitle.trim();
+
+        const boxEl = tile.closest(".group-box");
+        if (boxEl) updateBoxResultsFromDOM(boxEl);
+      });
+    }
+
+    box.appendChild(header);
+    box.appendChild(body);
+
+    makeResizable(box);
+    makeDraggable(box, header);
+    return box;
+  }
+
+
+
+
+
+
+async function runSearch() {
+  const platform = document.getElementById("platformSelect").value;
+  const style = document.getElementById("styleSelect").value;
+
+  const niche = nicheInput.value.trim();
+  const seed = seedInput.value.trim();
+
+  if (!niche) {
+    alert("Please enter a niche first.");
+    return;
+  }
+
+  // Create loading box immediately (this is the per-search Saved box)
+  const label = `Saved: ${platform} • ${style} • ${niche}`;
+  const loadingBox = createGroupBox(label, [
+    { title: "Loading…", url: "#", platform, tag: style }
+  ]);
+  canvasEl.appendChild(loadingBox);
+
+  try {
+    const params = new URLSearchParams({
+      platform,
+      style,
+      niche,
+      best: "1",
+    });
+
+    if (seed) params.append("seed", seed);
+
+    const res = await fetch(`/api/search?${params.toString()}`);
+    const data = await res.json();
+
+    loadingBox.remove();
+
+    const results = Array.isArray(data.results) ? data.results : [];
+
+    // Create a single per-search Saved box
+    const group = createGroupBox(`Saved: ${data.platform} • ${data.style} • ${niche}`, results);
+    canvasEl.appendChild(group);
+
+  } catch (err) {
+    console.error(err);
+    loadingBox.remove();
+    alert("Search failed. Check console.");
+  }
+}
+
+const saveBtn = document.getElementById("saveBtn");
+
+function updateBoxResultsFromDOM(boxEl) {
+  const items = Array.from(boxEl.querySelectorAll(".tile")).map((a) => {
+    return {
+      title: (a.dataset.title || "").trim(),
+      url: a.getAttribute("href") || "",
+      platform: a.dataset.platform || "",
+      tag: a.dataset.tag || "",
+      description: a.dataset.description || "",
+      thumbnail: a.dataset.thumbnail || "",
+    };
+  });
+
+  boxEl.dataset.results = JSON.stringify(items);
+}
+
+
+async function saveBoard() {
+  const boxes = Array.from(canvasEl.querySelectorAll(".group-box")).map((el) => {
+    return {
+      id: el.dataset.id,
+      x: parseInt(el.style.left || "0", 10),
+      y: parseInt(el.style.top || "0", 10),
+      query: el.dataset.query,
+      results: JSON.parse(el.dataset.results || "[]"),
+    };
+  });
+
+  const payload = { board: boxes };
+
+  const res = await fetch("/api/board/save", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  if (!res.ok) throw new Error("Save failed");
+  console.log("Board saved");
+}
+
+function populateStylesForPlatform(platform) {
+  const styleSelect = document.getElementById("styleSelect");
+  const options = STYLE_OPTIONS[platform] || [];
+
+  // clear existing
+  styleSelect.innerHTML = "";
+
+  // add new
+  for (const opt of options) {
+    const o = document.createElement("option");
+    o.value = opt.value;
+    o.textContent = opt.label;
+    styleSelect.appendChild(o);
+  }
+}
+
+async function loadBoard() {
+  try {
+    const res = await fetch("/api/board/load");
+    const payload = await res.json();
+
+    // Clear board
+    canvasEl.innerHTML = "";
+
+    // payload.board might be:
+    // - an array (new format)
+    // - an object like { boxes: [...] } or { board: [...] } (legacy mistakes)
+    let items = payload.board || [];
+    if (!Array.isArray(items)) {
+      items = items.board || items.boxes || [];
+    }
+
+    for (const item of items) {
+      // NEW format (what we want): { id, x, y, query, results: [...] }
+      let query = item.query;
+      let results = item.results;
+
+      // LEGACY format (from earlier test): { id, x, y, title, url, platform, style }
+      if (!query && item.platform && item.style && item.title && item.url) {
+        query = `${item.platform} • ${item.style}`;
+        results = [
+          {
+            title: item.title,
+            url: item.url,
+            platform: item.platform,
+            tag: item.style,
+          },
+        ];
+      }
+
+      // If still no usable data, skip it (prevents empty boxes forever)
+      if (!query && (!results || results.length === 0)) continue;
+
+      const box = createGroupBox(query, results || [], item.id);
+
+      // restore id + position
+      box.style.left = `${item.x ?? 24}px`;
+      box.style.top = `${item.y ?? 24}px`;
+
+      canvasEl.appendChild(box);
+    }
+
+    // Cleanup legacy "Saved Results" box from older versions
+    for (const el of Array.from(canvasEl.querySelectorAll(".group-box"))) {
+      const q = (el.dataset.query || "").toLowerCase();
+      if (q.includes("saved results")) {
+        el.remove();
+      }
+    }
+
+    // Empty state
+    if (canvasEl.querySelectorAll(".group-box").length === 0) {
+      canvasEl.textContent =
+        "No saved board yet. Run a search, drag boxes around, then hit Save.";
+    }
+  } catch (err) {
+    console.error("Load failed:", err);
+    canvasEl.textContent = "Failed to load saved board. Check console.";
+  }
+}
+
+saveBtn.addEventListener("click", () => {
+  saveBoard().catch((err) => {
+    console.error(err);
+    alert("Save failed. Check console.");
+  });
+});
+
+// Load saved board ONCE on startup. While it loads, disable Search so we don't
+// render boxes that then get wiped by loadBoard() clearing the board.
+searchBtn.disabled = true;
+searchBtn.style.opacity = "0.6";
+searchBtn.style.cursor = "not-allowed";
+
+const boardReady = loadBoard().finally(() => {
+  searchBtn.disabled = false;
+  searchBtn.style.opacity = "1";
+  searchBtn.style.cursor = "pointer";
+});
+
+// One click handler only
+searchBtn.addEventListener("click", async () => {
+  await boardReady;
+  runSearch();
+});
+
+</script>
+
+  </body>
+</html>
