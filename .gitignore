@@ -1,6 +1,17 @@
+# virtual env
 .venv/
+venv/
+
+# environment variables
 .env
-data/board.json
-data/preview_cache.json
+
+# python cache
 __pycache__/
-.env
+*.pyc
+
+# runtime / generated data
+data/
+!data/.gitkeep
+
+# macOS
+.DS_Store
