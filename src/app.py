@@ -962,6 +962,51 @@ def api_upsert_post(payload: PostPayload):
         return {"ok": True, "post": row}
     except ValueError as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    
+@app.post("/api/crawl/seed_accounts")
+def crawl_seed_accounts():
+    """
+    Stub crawler:
+    - Reads seed accounts from DB
+    - Generates fake posts for each
+    Inserts into posts table 
+    """
+
+    seeds = list_seed_accounts()
+    if not seeds:
+        return {"ok": True, "message": "No seed accounts found", "created": 0}
+    
+    created = []
+
+    for seed in seeds:
+        handle = seed.get("handle")
+        platform = seed.get("platform")
+        niche = seed.get("niche") or ""
+
+        # Fake posts (simulate discovery)
+
+        for i in range(3):
+            fake_url = f"https://www.instagram.com/p/FAKE{handle.upper()}{i}/"
+
+            post = upsert_post(
+                platform=platform,
+                post_url=fake_url,
+                title=f"{handle} post #{i+1}",
+                description=f"Generated post for {niche}",
+                tag="carousel",
+                preview_url="",
+                account_handle=handle,
+                niche=niche,
+            )
+
+            created.append(post)
+
+    return {
+        "ok": True,
+        "seed_accounts": len(seeds),
+        "posts_created": len(created),
+        "posts": created,
+    }
 
 # For local dev: allow the frontend to call the API easily
 
