@@ -11,6 +11,9 @@ import requests
 import hashlib
 import time
 import re
+import sqlite3
+from contextlib import contextmanager
+from datetime import datetime, timezone
 
 from fastapi import Response
 from fastapi.responses import StreamingResponse
@@ -18,7 +21,11 @@ from urllib.parse import unquote
 
 load_dotenv()
 
+
 app = FastAPI(title="Content Style Board")
+
+def utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 from urllib.parse import urlparse
 
@@ -606,8 +613,298 @@ INDEX_HTML = FRONTEND_DIR / "index.html"
 DATA_DIR = Path("data")
 BOARD_FILE = DATA_DIR / "board.json"
 
+DB_FILE = DATA_DIR / "app.db"
+
+@contextmanager
+def get_db():
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    try:
+        yield conn
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def init_db() -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    with get_db() as conn:
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS seed_accounts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                platform TEXT NOT NULL,
+                handle TEXT NOT NULL,
+                niche TEXT NOT NULL DEFAULT '',
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                last_crawled_at TEXT
+            );
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_seed_accounts_platform_handle
+            ON seed_accounts(platform, handle);
+
+            CREATE TABLE IF NOT EXISTS posts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                platform TEXT NOT NULL,
+                account_handle TEXT NOT NULL DEFAULT '',
+                post_url TEXT NOT NULL,
+                shortcode TEXT NOT NULL DEFAULT '',
+                post_type TEXT NOT NULL DEFAULT '',
+                caption TEXT NOT NULL DEFAULT '',
+                preview_mode TEXT NOT NULL DEFAULT '',
+                preview_url TEXT NOT NULL DEFAULT '',
+                embed_url TEXT NOT NULL DEFAULT '',
+                niche TEXT NOT NULL DEFAULT '',
+                collected_at TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_posts_post_url
+            ON posts(post_url);
+
+            CREATE INDEX IF NOT EXISTS idx_posts_platform_post_type
+            ON posts(platform, post_type);
+
+            CREATE INDEX IF NOT EXISTS idx_posts_niche
+            ON posts(niche);
+
+            CREATE TABLE IF NOT EXISTS crawl_jobs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_type TEXT NOT NULL,
+                target TEXT NOT NULL,
+                status TEXT NOT NULL,
+                error_message TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                started_at TEXT,
+                finished_at TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS post_tags (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                post_id INTEGER NOT NULL,
+                tag_type TEXT NOT NULL,
+                tag_value TEXT NOT NULL,
+                score REAL NOT NULL DEFAULT 0,
+                FOREIGN KEY(post_id) REFERENCES posts(id) ON DELETE CASCADE
+            );
+            """
+        )
+
+
+def shortcode_from_url(url: str) -> str:
+    u = (url or "").strip()
+    try:
+        p = urlparse(u)
+        path = p.path or ""
+    except Exception:
+        path = ""
+
+    m = re.search(r"/(p|reel|reels|status)/([A-Za-z0-9_-]+)/?", path)
+    if m:
+        return m.group(2)
+    return ""
+
+
+def build_embed_url(platform: str, post_url: str) -> str:
+    platform = (platform or "").lower().strip()
+    post_url = (post_url or "").strip()
+    if not post_url:
+        return ""
+
+    if platform == "instagram":
+        try:
+            u = urlparse(post_url)
+            path = u.path or ""
+            if not path.endswith("/"):
+                path += "/"
+            if path.endswith("/embed/"):
+                return post_url
+            return f"https://www.instagram.com{path}embed/"
+        except Exception:
+            return ""
+
+    return ""
+
+
+def create_seed_account(platform: str, handle: str, niche: str = "") -> dict:
+    platform = (platform or "").lower().strip()
+    handle = (handle or "").strip().lstrip("@")
+    niche = (niche or "").strip()
+    now = utc_now_iso()
+
+    if not platform:
+        raise ValueError("platform is required")
+    if not handle:
+        raise ValueError("handle is required")
+
+    with get_db() as conn:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO seed_accounts (platform, handle, niche, is_active, created_at)
+            VALUES (?, ?, ?, 1, ?)
+            """,
+            (platform, handle, niche, now),
+        )
+        row = conn.execute(
+            "SELECT * FROM seed_accounts WHERE platform = ? AND handle = ?",
+            (platform, handle),
+        ).fetchone()
+
+    return dict(row) if row else {}
+
+
+def list_seed_accounts() -> list:
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM seed_accounts ORDER BY created_at DESC, id DESC"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def upsert_post(
+    platform: str,
+    post_url: str,
+    title: str = "",
+    description: str = "",
+    tag: str = "",
+    preview_url: str = "",
+    account_handle: str = "",
+    niche: str = "",
+) -> dict:
+    platform = (platform or "").lower().strip()
+    post_url = (post_url or "").strip()
+    title = (title or "").strip()
+    description = (description or "").strip()
+    tag = (tag or "").strip()
+    preview_url = (preview_url or "").strip()
+    account_handle = (account_handle or "").strip().lstrip("@")
+    niche = (niche or "").strip()
+
+    if not platform:
+        raise ValueError("platform is required")
+    if not post_url:
+        raise ValueError("post_url is required")
+
+    caption = title
+    if description:
+        caption = f"{title}\n{description}".strip()
+
+    shortcode = shortcode_from_url(post_url)
+    preview_mode = "embed" if platform == "instagram" else ("image" if preview_url else "")
+    embed_url = build_embed_url(platform, post_url)
+    now = utc_now_iso()
+
+    with get_db() as conn:
+        conn.execute(
+            """
+            INSERT INTO posts (
+                platform, account_handle, post_url, shortcode, post_type,
+                caption, preview_mode, preview_url, embed_url, niche,
+                collected_at, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(post_url) DO UPDATE SET
+                platform = excluded.platform,
+                account_handle = excluded.account_handle,
+                shortcode = excluded.shortcode,
+                post_type = excluded.post_type,
+                caption = excluded.caption,
+                preview_mode = excluded.preview_mode,
+                preview_url = excluded.preview_url,
+                embed_url = excluded.embed_url,
+                niche = excluded.niche,
+                collected_at = excluded.collected_at
+            """,
+            (
+                platform,
+                account_handle,
+                post_url,
+                shortcode,
+                tag,
+                caption,
+                preview_mode,
+                preview_url,
+                embed_url,
+                niche,
+                now,
+                now,
+            ),
+        )
+        row = conn.execute("SELECT * FROM posts WHERE post_url = ?", (post_url,)).fetchone()
+
+    return dict(row) if row else {}
+
+
+def search_posts_index(platform: str, style: str, niche: str = "", limit: int = 24) -> list:
+    platform = (platform or "").lower().strip()
+    style = (style or "").lower().strip()
+    niche = (niche or "").strip().lower()
+
+    where = ["platform = ?"]
+    params = [platform]
+
+    if style:
+        where.append("post_type = ?")
+        params.append(style)
+
+    if niche:
+        where.append("(LOWER(niche) LIKE ? OR LOWER(caption) LIKE ? OR LOWER(account_handle) LIKE ?)")
+        like = f"%{niche}%"
+        params.extend([like, like, like])
+
+    sql = f"""
+        SELECT *
+        FROM posts
+        WHERE {' AND '.join(where)}
+        ORDER BY collected_at DESC, id DESC
+        LIMIT ?
+    """
+    params.append(limit)
+
+    with get_db() as conn:
+        rows = conn.execute(sql, params).fetchall()
+
+    out = []
+    for r in rows:
+        row = dict(r)
+        out.append(
+            {
+                "title": (row.get("caption") or row.get("post_url") or "").splitlines()[0][:140],
+                "url": row.get("post_url") or "",
+                "platform": row.get("platform") or platform,
+                "tag": row.get("post_type") or style,
+                "description": row.get("caption") or "",
+                "thumbnail": row.get("preview_url") or "",
+                "preview_mode": row.get("preview_mode") or "",
+                "embed_url": row.get("embed_url") or "",
+                "account_handle": row.get("account_handle") or "",
+                "niche": row.get("niche") or "",
+                "source": "local_index",
+            }
+        )
+    return out
+
 class BoardPlayload(BaseModel):
     board: list
+
+
+# --- SQLite persistence models ---
+class SeedAccountPayload(BaseModel):
+    platform: str
+    handle: str
+    niche: str = ""
+
+
+class PostPayload(BaseModel):
+    platform: str
+    post_url: str
+    title: str = ""
+    description: str = ""
+    tag: str = ""
+    preview_url: str = ""
+    account_handle: str = ""
+    niche: str = ""
 
 @app.post("/api/board/save")
 def save_board(payload: BoardPlayload):
@@ -633,7 +930,41 @@ def load_board():
    
     return {"ok": True, "board": data}
 
+
+# --- SQLite persistence API endpoints ---
+@app.post("/api/seed_accounts")
+def api_create_seed_account(payload: SeedAccountPayload):
+    try:
+        row = create_seed_account(payload.platform, payload.handle, payload.niche)
+        return {"ok": True, "seed_account": row}
+    except ValueError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+
+
+@app.get("/api/seed_accounts")
+def api_list_seed_accounts():
+    return {"ok": True, "seed_accounts": list_seed_accounts()}
+
+
+@app.post("/api/posts")
+def api_upsert_post(payload: PostPayload):
+    try:
+        row = upsert_post(
+            platform=payload.platform,
+            post_url=payload.post_url,
+            title=payload.title,
+            description=payload.description,
+            tag=payload.tag,
+            preview_url=payload.preview_url,
+            account_handle=payload.account_handle,
+            niche=payload.niche,
+        )
+        return {"ok": True, "post": row}
+    except ValueError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+
 # For local dev: allow the frontend to call the API easily
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # later we can tighten this up
@@ -642,9 +973,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+# --- Startup hook for DB ---
+@app.on_event("startup")
+def startup_init():
+    init_db()
+
 @app.get("/api/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "db": str(DB_FILE), "db_exists": DB_FILE.exists()}
 
 @app.get("/api/search")
 def search(
@@ -657,6 +994,24 @@ def search(
 ):
     platform = (platform or "instagram").lower().strip()
     style = (style or "carousel").lower().strip()
+
+    # First try the local SQLite index. If we already have matching posts,
+    # return them immediately and skip Brave.
+    indexed_results = search_posts_index(platform=platform, style=style, niche=niche, limit=24)
+    if indexed_results:
+        resp = {
+            "platform": platform,
+            "style": style,
+            "q": "local_index",
+            "results": dedupe_and_truncate(indexed_results, limit=8),
+        }
+        if debug:
+            resp["debug"] = {
+                "source": "local_index",
+                "db": str(DB_FILE),
+                "count": len(indexed_results),
+            }
+        return resp
 
     # 1) Build a base query
     q = build_query(platform, style, niche=niche, seed=seed)
