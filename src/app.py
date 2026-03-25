@@ -652,6 +652,10 @@ def init_db() -> None:
                 post_url TEXT NOT NULL,
                 shortcode TEXT NOT NULL DEFAULT '',
                 post_type TEXT NOT NULL DEFAULT '',
+                classified_post_type TEXT NOT NULL DEFAULT '',
+                classifier_confidence REAL NOT NULL DEFAULT 0,
+                classifier_version TEXT NOT NULL DEFAULT '',
+                classified_at TEXT NOT NULL DEFAULT '',
                 caption TEXT NOT NULL DEFAULT '',
                 preview_mode TEXT NOT NULL DEFAULT '',
                 preview_url TEXT NOT NULL DEFAULT '',
@@ -691,6 +695,28 @@ def init_db() -> None:
             );
             """
         )
+
+        existing_cols = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(posts)").fetchall()
+        }
+
+        if "classified_post_type" not in existing_cols:
+            conn.execute(
+                "ALTER TABLE posts ADD COLUMN classified_post_type TEXT NOT NULL DEFAULT ''"
+            )
+        if "classifier_confidence" not in existing_cols:
+            conn.execute(
+                "ALTER TABLE posts ADD COLUMN classifier_confidence REAL NOT NULL DEFAULT 0"
+            )
+        if "classifier_version" not in existing_cols:
+            conn.execute(
+                "ALTER TABLE posts ADD COLUMN classifier_version TEXT NOT NULL DEFAULT ''"
+            )
+        if "classified_at" not in existing_cols:
+            conn.execute(
+                "ALTER TABLE posts ADD COLUMN classified_at TEXT NOT NULL DEFAULT ''"
+            )
 
 
 def shortcode_from_url(url: str) -> str:
@@ -772,6 +798,9 @@ def upsert_post(
     preview_url: str = "",
     account_handle: str = "",
     niche: str = "",
+    classified_post_type: str = "",
+    classifier_confidence: float = 0.0,
+    classifier_version: str = "",
 ) -> dict:
     platform = (platform or "").lower().strip()
     post_url = (post_url or "").strip()
@@ -781,6 +810,8 @@ def upsert_post(
     preview_url = (preview_url or "").strip()
     account_handle = (account_handle or "").strip().lstrip("@")
     niche = (niche or "").strip()
+    classified_post_type = (classified_post_type or "").strip()
+    classifier_version = (classifier_version or "").strip()
 
     if not platform:
         raise ValueError("platform is required")
@@ -795,20 +826,38 @@ def upsert_post(
     preview_mode = "embed" if platform == "instagram" else ("image" if preview_url else "")
     embed_url = build_embed_url(platform, post_url)
     now = utc_now_iso()
+    classified_at = now if classified_post_type else ""
 
     with get_db() as conn:
         conn.execute(
             """
             INSERT INTO posts (
                 platform, account_handle, post_url, shortcode, post_type,
+                classified_post_type, classifier_confidence, classifier_version, classified_at,
                 caption, preview_mode, preview_url, embed_url, niche,
                 collected_at, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(post_url) DO UPDATE SET
                 platform = excluded.platform,
                 account_handle = excluded.account_handle,
                 shortcode = excluded.shortcode,
                 post_type = excluded.post_type,
+                classified_post_type = CASE
+                    WHEN excluded.classified_post_type <> '' THEN excluded.classified_post_type
+                    ELSE posts.classified_post_type
+                END,
+                classifier_confidence = CASE
+                    WHEN excluded.classified_post_type <> '' THEN excluded.classifier_confidence
+                    ELSE posts.classifier_confidence
+                END,
+                classifier_version = CASE
+                    WHEN excluded.classified_post_type <> '' THEN excluded.classifier_version
+                    ELSE posts.classifier_version
+                END,
+                classified_at = CASE
+                    WHEN excluded.classified_post_type <> '' THEN excluded.classified_at
+                    ELSE posts.classified_at
+                END,
                 caption = excluded.caption,
                 preview_mode = excluded.preview_mode,
                 preview_url = excluded.preview_url,
@@ -822,6 +871,10 @@ def upsert_post(
                 post_url,
                 shortcode,
                 tag,
+                classified_post_type,
+                float(classifier_confidence or 0),
+                classifier_version,
+                classified_at,
                 caption,
                 preview_mode,
                 preview_url,
@@ -845,8 +898,18 @@ def search_posts_index(platform: str, style: str, niche: str = "", limit: int = 
     params = [platform]
 
     if style:
-        where.append("post_type = ?")
-        params.append(style)
+        if style == "carousel":
+            where.append("post_type = ?")
+            params.append("carousel")
+        elif style in ("single-clip", "multi-clip", "talking-head"):
+            where.append("classified_post_type = ?")
+            params.append(style)
+        elif style == "reel":
+            where.append("post_type = ?")
+            params.append("reel")
+        else:
+            where.append("post_type = ?")
+            params.append(style)
 
     if niche:
         where.append("(LOWER(niche) LIKE ? OR LOWER(caption) LIKE ? OR LOWER(account_handle) LIKE ?)")
@@ -873,7 +936,10 @@ def search_posts_index(platform: str, style: str, niche: str = "", limit: int = 
                 "title": (row.get("caption") or row.get("post_url") or "").splitlines()[0][:140],
                 "url": row.get("post_url") or "",
                 "platform": row.get("platform") or platform,
-                "tag": row.get("post_type") or style,
+                "tag": row.get("classified_post_type") or style,
+                "raw_post_type": row.get("post_type") or "",
+                "classified_post_type": row.get("classified_post_type") or "",
+                "classifier_confidence": row.get("classifier_confidence") or 0,
                 "description": row.get("caption") or "",
                 "thumbnail": row.get("preview_url") or "",
                 "preview_mode": row.get("preview_mode") or "",
@@ -1257,7 +1323,7 @@ def collect_instagram_seed_account(handle: str, niche: str = "", max_posts: int 
 
     for post_url in urls:
         path = (urlparse(post_url).path or "").lower()
-        tag = "carousel" if "/p/" in path else "single-clip"
+        tag = "carousel" if "/p/" in path else "reel"
 
         unfurled = unfurl_url(post_url)
         title = ""
@@ -1280,6 +1346,9 @@ def collect_instagram_seed_account(handle: str, niche: str = "", max_posts: int 
             preview_url=preview_url,
             account_handle=handle,
             niche=niche,
+            classified_post_type="carousel" if tag == "carousel" else "",
+            classifier_confidence=0.99 if tag == "carousel" else 0.0,
+            classifier_version="raw_structural_v1" if tag == "carousel" else "",
         )
         created.append(row)
 
@@ -1306,6 +1375,9 @@ class PostPayload(BaseModel):
     preview_url: str = ""
     account_handle: str = ""
     niche: str = ""
+    classified_post_type: str = ""
+    classifier_confidence: float = 0.0
+    classifier_version: str = ""
 
 @app.post("/api/board/save")
 def save_board(payload: BoardPlayload):
@@ -1359,6 +1431,9 @@ def api_upsert_post(payload: PostPayload):
             preview_url=payload.preview_url,
             account_handle=payload.account_handle,
             niche=payload.niche,
+            classified_post_type=payload.classified_post_type,
+            classifier_confidence=payload.classifier_confidence,
+            classifier_version=payload.classifier_version,
         )
         return {"ok": True, "post": row}
     except ValueError as e:
@@ -1371,6 +1446,92 @@ def api_debug_instagram_profile(handle: str = ""):
     if not result.get("ok"):
         return JSONResponse(result, status_code=400)
     return result
+
+def classify_reel_row(row: sqlite3.Row) -> tuple[str, float, str]:
+    """
+    Temporary V1 classifier stub.
+    Right now this still uses text heuristics.
+    Later, this is the exact function we will replace
+    with real rendered-embed visual classification.
+    """
+    post_url = row["post_url"] or ""
+    caption = row["caption"] or ""
+    raw_post_type = (row["post_type"] or "").strip().lower()
+
+    if raw_post_type == "carousel":
+        return ("carousel", 0.99, "raw_structural_v1")
+    
+    if raw_post_type != "reel":
+        return ("", 0.0, "")
+    
+    analysis = analyze_item(
+        url=post_url,
+        title=caption.splitlines()[0] if caption else "",
+        description=caption,
+        platform="instagram",
+        tag="",
+        niche=row["niche"] or "",
+        seed="",
+    )
+
+    style = (analysis.get("style") or "").strip().lower()
+    confidence = float(analysis.get("confidence") or 0)
+
+    if style in ("single-clip", "multi-clip", "talking-head"):
+        return (style, confidence, "heuristic_text_v1")
+    
+    return ("", 0.0, "")
+
+@app.post("/api/classify/reels")
+def api_classify_reels(limit: int = 100):
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM posts
+            WHERE platform = 'instagram'
+                AND post_type = 'reel'
+                AND (classified_post_type = '' OR classified_post_type IS NULL)
+            ORDER BY collected_at DESC, id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+
+        updated = []
+        now = utc_now_iso()
+
+        for row in rows:
+            classified_post_type, confidence, version = classify_reel_row(row)
+            if not classified_post_type:
+                continue
+
+            conn.execute(
+                """
+                UPDATE posts
+                SET classified_post_type = ?,
+                    classifier_confidence = ?,
+                    classifier_version = ?,
+                    classified_at = ?
+                WHERE id = ?
+                """,
+                (classified_post_type, confidence, version, now, row["id"]),
+            )
+
+            fresh = conn.execute(
+                "SELECT * FROM posts WHERE id = ?",
+                (row["id"],),
+            ).fetchone()
+
+            if fresh:
+                updated.append(dict(fresh))
+    return {
+        "ok": True,
+        "classified": len(updated),
+        "posts": updated,
+        "classifier": "heuristic_text_v1",
+        "note": "This is the placeholder classifier. Next step is rendered-embed visual classification.",
+    }
 
 
 @app.post("/api/crawl/seed_accounts")
@@ -1624,7 +1785,7 @@ def search(
             "title": title,
             "url": url,
             "platform": platform,
-            "tag": style,
+            "tag": style,  # UI-facing tag (derived), raw stored separately
             "description": description,
             "thumbnail": thumb,
         })
@@ -1825,7 +1986,7 @@ def tokenize(text: str) -> set:
     # drop tiny tokens
     return set([p for p in parts if len(p) >= 3])
 
-def score_nich_relevance(niche: str, text: str) -> float:
+def score_niche_relevance(niche: str, text: str) -> float:
     """
     Returns 0.0–1.0 based on how strongly the content looks related to the niche.
     Lightweight heuristic: keyword overlap + a few boosts for exact phrase matches.
@@ -1854,17 +2015,79 @@ def score_nich_relevance(niche: str, text: str) -> float:
     return float(max(0.0, min(1.0, score)))
 
 
-def infer_style(platform: str, tag: str, fmt: str) -> Dict[str, Any]:
+def infer_style(platform: str, tag: str, fmt: str, text: str = "") -> Dict[str, Any]:
+    """
+    Decide what style a piece of content most likely is.
+
+    platform:
+        which platform the content came from (instagram, tiktok, x)
+    
+    tag:
+        The existing stored tag, if we already have one
+
+    fmt:
+        The structural format inferred from the URL
+        Example:
+            instagram_post
+            instagram_reel
+            tiktok_video
+            x_status
+    
+    text:
+        Combined searchable text signal from title + description + url
+        We use this to improve reel subtype classification
+    """
+
     platform = (platform or "").lower().strip()
     tag = (tag or "").lower().strip()
+    fmt = (fmt or "").lower().strip()
+    text = (text or "").lower().strip()
 
     if platform == "instagram":
         if fmt == "instagram_post":
             return {"style": "carousel", "confidence": 0.85}
         if fmt == "instagram_reel":
-            if tag in ("multi-clip", "single-clip"):
-                return {"style": tag, "confidence": 0.65}
-            return {"style": "reel", "confidence": 0.60}
+            if tag in ("multi-clip", "single-clip", "talking-head"):
+                return {"style": tag, "confidence": 0.75}
+            
+            multi_clip_hints = [
+                "part 1",
+                "part 2",
+                "pt 1",
+                "pt.1",
+                "series",
+                "day 1",
+                "episode",
+            ]
+
+            single_clip_hints = [
+                "text overlay",
+                "caption",
+                "on screen text",
+                "read this",
+                "watch this",
+            ]
+
+            talking_head_hints = [
+                "talking",
+                "explaining",
+                "face to camera",
+                "direct to camera",
+                "here's how",
+                "let me explain",
+                "i'm going to show you",
+            ]
+
+            if any(hint in text for hint in multi_clip_hints):
+                return {"style": "multi-clip", "confidence": 0.7}
+            
+            if any(hint in text for hint in single_clip_hints):
+                return {"style": "single-clip", "confidence": 0.7}
+            
+            if any(hint in text for hint in talking_head_hints):
+                return {"style": "talking-head", "confidence": 0.7}
+
+            return {"style": "reel", "confidence": 0.5}
 
     if platform == "tiktok":
         if fmt == "tiktok_video":
@@ -1876,18 +2099,19 @@ def infer_style(platform: str, tag: str, fmt: str) -> Dict[str, Any]:
 
     return {"style": tag or "unknown", "confidence": 0.30}
 
+
 def analyze_item(url: str, title: str, description: str, platform: str, tag: str, niche: str, seed: str):
     base = classify_from_url(url)
     platform2 = (platform or base["platform"] or "unknown").lower().strip()
     fmt = base["format"]
 
-    combined = f"{title or ''}\n{description or ''}".strip()
+    combined = f"{title or ''}\n{description or ''}\n{url or ''}".strip()
 
-    niche_score = score_nich_relevance(niche or "", combined)
+    niche_score = score_niche_relevance(niche or "", combined)
     niche_match = (niche_score >= 0.45) if (niche or "").strip() else True
 
     tutorial_flag = looks_like_tutorial(combined)
-    style_guess = infer_style(platform2, tag or "", fmt)
+    style_guess = infer_style(platform2, tag or "", fmt, combined)
 
     return {
         "ok": True,
@@ -1914,11 +2138,11 @@ def analyze(payload: AnalyzePayload):
 
     title = payload.title or ""
     desc = payload.description or ""
-    combined = f"{title}\n{desc}".strip()
-    niche_score = score_nich_relevance(payload.niche or "", combined)
+    combined = f"{title}\n{desc}\n{url}".strip()
+    niche_score = score_niche_relevance(payload.niche or "", combined)
 
     tutorial_flag = looks_like_tutorial(combined)
-    style_guess = infer_style(platform, payload.tag or "", fmt)
+    style_guess = infer_style(platform, payload.tag or "", fmt, combined)
 
     notes = []
     if platform == "instagram" and fmt == "instagram_post":
