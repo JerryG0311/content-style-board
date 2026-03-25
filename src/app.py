@@ -1324,6 +1324,7 @@ def collect_instagram_seed_account(handle: str, niche: str = "", max_posts: int 
     for post_url in urls:
         path = (urlparse(post_url).path or "").lower()
         tag = "carousel" if "/p/" in path else "reel"
+        print("DEBUG COLLECT TAG:", post_url, "->", tag)
 
         unfurled = unfurl_url(post_url)
         title = ""
@@ -1530,7 +1531,98 @@ def api_classify_reels(limit: int = 100):
         "classified": len(updated),
         "posts": updated,
         "classifier": "heuristic_text_v1",
-        "note": "This is the placeholder classifier. Next step is rendered-embed visual classification.",
+        "note": "This is the placeholder text classifier. Use /api/classify/reels/visual for rendered-embed visual writeback.",
+    }
+
+@app.get("/api/reels/pending_visual_classification")
+def api_pending_visual_classification(limit: int = 24):
+    """
+    Return raw Instagram reels that still need visual classification.
+    The frontend can use this to know which rendered embeds still need to be analyzed.
+    """
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM posts
+            WHERE platform = 'instagram'
+                AND post_type = 'reel'
+                AND (classified_post_type = '' OR classified_post_type IS NULL)
+            ORDER BY collected_at DESC, id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    
+    out = []
+    for row in rows:
+        item = dict(row)
+        out.append(
+            {
+                "post_url": item.get("post_url") or "",
+                "embed_url": item.get("embed_url") or "",
+                "caption": item.get("caption") or "",
+                "account_handle": item.get("account_handle") or "",
+                "niche": item.get("niche") or "",
+                "raw_post_type": item.get("post_type") or "",
+            }
+        )
+    
+    return {
+        "ok": True,
+        "pending": len(out),
+        "posts": out,
+        "note": "These reels should be classified from the actual rendered embed content shown in the board.",
+    }
+
+class VisualClassificationPayload(BaseModel):
+    post_url: str
+    text_density: float = 0.0
+    scene_change_score: float = 0.0
+    face_ratio: float = 0.0
+    has_large_face: bool = False
+    sampled_frames: int = 0
+    source: str = "rendered_embed_v1"
+
+
+class VisualClassificationBatchPayload(BaseModel):
+    items: list[VisualClassificationPayload]
+
+@app.post("/api/classify/reels/visual")
+def api_classify_reels_visual(payload: VisualClassificationBatchPayload):
+    """
+    Accept visual-signal measurements gathered from the actual rendered embeds
+    in the board, then write the classification result back into SQLite.
+    """
+    updated = []
+
+    for item in payload.items:
+        classified_post_type, confidence, version = classify_reel_from_visual_signals(
+            text_density=item.text_density,
+            scene_change_score=item.scene_change_score,
+            face_ratio=item.face_ratio,
+            has_large_face=item.has_large_face,
+            sampled_frames=item.sampled_frames,
+        )
+
+        if not classified_post_type:
+            continue
+
+        row = update_post_classification_by_url(
+            post_url=item.post_url,
+            classified_post_type=classified_post_type,
+            classifier_confidence=confidence,
+            classifier_version=f"{version}:{item.source}",
+        )
+
+        if row:
+            updated.append(row)
+    
+    return {
+        "ok": True,
+        "classified": len(updated),
+        "posts": updated,
+        "classifier": "rendered_embed_visual_v1",
     }
 
 
@@ -1915,7 +2007,7 @@ def search(
         resp["debug"] = dbg
     return resp
 
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from urllib.parse import urlparse
 import re
 
@@ -1927,6 +2019,8 @@ class AnalyzePayload(BaseModel):
     tag: Optional[str] = ""
     niche: Optional[str] = ""
     seed: Optional[str] = ""
+
+
 
 TUTORIAL_HINTS = [
     "make a carousel", "create a carousel",
@@ -2125,6 +2219,92 @@ def analyze_item(url: str, title: str, description: str, platform: str, tag: str
         "niche_score": niche_score,
         "niche_match": niche_match,
     }
+
+def classify_reel_from_visual_signals(
+        text_density: float,
+        scene_change_score: float, 
+        face_ratio: float,
+        has_large_face: bool,
+        sampled_frames: int,
+) -> tuple[str, float, str]:
+    """
+    First real visual-classification decision layer.
+
+    IMPORTANT:
+    This function does NOT generate the visual signals itself.
+    It expects the frontend/browser to inspect the actual rendered embed
+    and POST the measured signals back to this backend.
+
+    That keeps the classifier grounded in the same post content the user sees
+    on the board, instead of relying on weak metadata or fallback preview guesses.
+    """
+
+    td = max(0.0, min(1.0, float(text_density or 0.0)))
+    sc = max(0.0, min(1.0, float(scene_change_score or 0.0)))
+    fr = max(0.0, min(1.0, float(face_ratio or 0.0)))
+    sampled = max(0, int(sampled_frames or 0))
+    has_face = bool(has_large_face)
+
+    if has_face and fr >= 0.18 and sc <= 0.35 and td <= 0.55:
+        confidence = min(0.95, 0.70 + (fr * 0.35) - (sc * 0.10))
+        return ("talking-head", float(max(0.0, confidence)), "rendered_embed_visual_v1")
+    
+    if sampled >= 3 and sc >= 0.45:
+        confidence = min(0.95, 0.68 + (sc *0.25))
+        return ("multi-clip", float(max(0.0, confidence)), "rendered_embed_visual_v1")
+    
+    if td >= 0.18 and sc <= 0.30 and (not has_face or fr < 0.18):
+        confidence = min(0.92, 0.62 + (td * 0.35) - (sc * 0.10))
+        return ("single-clip", float(max(0.0, confidence)), "rendered_embed_visual_v1")
+    
+    return ("", 0.0, "")
+
+def update_post_classification_by_url(
+        post_url: str, 
+        classified_post_type: str,
+        classifier_confidence: float, 
+        classifier_version: str,
+) -> dict:
+    """
+    Update one post's classified output fields using post_url as the key.
+    """
+    post_url = (post_url or "").strip()
+    classified_post_type = (classified_post_type or "").strip()
+    classifier_version = (classifier_version or "").strip()
+
+    if not post_url:
+        raise ValueError("post_url is required")
+    if not classified_post_type:
+        raise ValueError("classified_post_type is required")
+    
+    now = utc_now_iso()
+
+    with get_db() as conn:
+        conn.execute(
+            """
+            UPDATE posts
+            SET classified_post_type = ?,
+                classifier_confidence = ?,
+                classifier_version = ?,
+                classified_at = ?
+            WHERE post_url = ?
+            """,
+            (
+                classified_post_type,
+                float(classifier_confidence or 0),
+                classifier_version,
+                now,
+                post_url,
+            ),
+        )
+
+        row = conn.execute(
+            "SELECT * FROM posts WHERE post_url = ?",
+            (post_url,),
+        ).fetchone()
+
+    return dict(row) if row else {}
+    
 
 @app.post("/api/analyze")
 def analyze(payload: AnalyzePayload):
