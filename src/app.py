@@ -12,6 +12,7 @@ import hashlib
 import time
 import re
 import sqlite3
+import subprocess
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
@@ -2020,6 +2021,9 @@ class AnalyzePayload(BaseModel):
     niche: Optional[str] = ""
     seed: Optional[str] = ""
 
+class ReelFramesPayload(BaseModel):
+    post_url: str
+    fps: float = 1.0
 
 
 TUTORIAL_HINTS = [
@@ -2032,6 +2036,7 @@ TUTORIAL_HINTS = [
     "video editing", "editing tutorial",
     "content ideas", "content calendar",
 ]
+
 
 def classify_from_url(url: str) -> Dict[str, Any]:
     u = (url or "").strip()
@@ -2304,7 +2309,120 @@ def update_post_classification_by_url(
         ).fetchone()
 
     return dict(row) if row else {}
+
+def safe_media_stem_from_url(post_url: str) -> str:
+    """
+    Build a safe folder/file stem from the reel shortcode.
+    Falls back to a generic name if shortcode extraction fails.
+    """
+    shortcode = shortcode_from_url(post_url)
+    if shortcode:
+        return f"ig_{shortcode}"
+    return "ig_reel"
+
+def download_instagram_reel_video(post_url: str) -> str:
+    """
+    Download the real Instagram reel video to disk using yt-dlp.
+
+    Returns:
+        Absolute path to the merged .mp4 file.
+
+    Important:
+        This is REAL media download, not thumbnails or preview images.
+    """
+    post_url = (post_url or "").strip()
+    if not post_url:
+        raise ValueError("post_url is required")
     
+    media_dir = DATA_DIR / "media"
+    media_dir.mkdir(parents=True, exist_ok=True)
+
+    stem = safe_media_stem_from_url(post_url)
+
+    output_template = str(media_dir / f"{stem}.%(ext)s")
+
+    cmd = [
+        "yt-dlp",
+        "--no-playlist",
+        "--merge-output-format",
+        "mp4",
+        "-o",
+        output_template,
+        post_url,
+    ]
+
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"yt-dlp failed: {(result.stderr or result.stdout or '').strip()}"
+        )
+    
+    final_path = media_dir / f"{stem}.mp4"
+    if not final_path.exists():
+        raise RuntimeError(f"Expected merged video not found: {final_path}")
+    
+    return str(final_path.resolve())
+
+def extract_frames_from_video(video_path: str, fps: float = 1.0) -> list[str]:
+    """
+    Extract frames from a local video file using ffmpeg.
+
+    Returns:
+        A sorted list of absolute frame image paths.
+
+    Important:
+        This is the frame source we can later send into AI vision.
+    """
+    video_path = (video_path or "").strip()
+    if not video_path:
+        raise ValueError("video_path is required")
+    
+    video_file = Path(video_path)
+    if not video_file.exists():
+        raise FileNotFoundError(f"Video file not found: {video_file}")
+    
+    frames_dir = DATA_DIR / "frames" / video_file.stem
+    frames_dir.mkdir(parents=True, exist_ok=True)
+
+    for old_file in frames_dir.glob("*.jpg"):
+        try:
+            old_file.unlink()
+        except Exception:
+            pass
+
+    output_pattern = str(frames_dir / "frame_%03d.jpg")
+
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(video_file),
+        "-vf",
+        f"fps={float(fps or 1.0)}",
+        output_pattern,
+    ]
+
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"ffmpeg failed: {(result.stderr or result.stdout or '').strip()}"
+        )
+
+    frame_paths = sorted(str(p.resolve()) for p in frames_dir.glob("*.jpg"))
+    if not frame_paths:
+        raise RuntimeError("No frames were extracted")
+    return frame_paths    
 
 @app.post("/api/analyze")
 def analyze(payload: AnalyzePayload):
@@ -2348,6 +2466,33 @@ def analyze(payload: AnalyzePayload):
         "niche_score": niche_score,
         "niche_match": niche_score >= 0.45,
     }
+
+@app.post("/api/debug/reel_frames")
+def api_debug_reel_frames(payload: ReelFramesPayload):
+    """
+    One-off backend test route:
+    1. Download the real Instagram reel video
+    2. Extract frames with ffmpeg
+    3. Return the saved file paths
+
+    This is the clean bridge into AI vision later.
+    """
+    try:
+        video_path = download_instagram_reel_video(payload.post_url)
+        frame_paths = extract_frames_from_video(video_path, fps=payload.fps)
+
+        return {
+            "ok": True,
+            "post_url": payload.post_url,
+            "video_path": video_path,
+            "frames_extracted": len(frame_paths),
+            "frame_paths": frame_paths,
+        }
+    except Exception as e:
+        return JSONResponse(
+            {"ok": False, "error": str(e)},
+            status_code=400,
+        )
 
 
 

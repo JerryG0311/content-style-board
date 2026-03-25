@@ -270,6 +270,7 @@
   <select id="styleSelect"></select>
 
   <button id="searchBtn">Search</button>
+  <button id="classifyBtn">Classify Reels (Test)</button>
   <button id="saveBtn">Save</button>
 </header>
 
@@ -890,10 +891,43 @@ platformSelect.addEventListener("change", () => {
     return box;
   }
 
+  // Step 1 frontend hook:
+  // This proves the frontend -> backend visual-classification pipeline works.
+  // For now, it sends temporary test signals for a few pending reels.
+  // Later, we will replace these fake values with real measurements from the rendered embeds.
+  async function classifyVisibleReels() {
+    const res = await fetch("/api/reels/pending_visual_classification?limit=3");
+    const data = await res.json();
 
+    const posts = Array.isArray(data.posts) ? data.posts : [];
+    if (!posts.length) {
+      console.log("No pending reels to classify.");
+      return;
+    }
 
+    const items = posts.map((post) => ({
+      post_url: post.post_url,
 
+      // TEMP TEST SIGNALS ONLY.
+      // These are placeholders so we can prove the pipeline works from the frontend.
+      text_density: Math.random(),
+      scene_change_score: Math.random(),
+      face_ratio: Math.random(),
+      has_large_face: Math.random() > 0.5,
+      sampled_frames: 6,
+      source: "frontend_v1",
+    }));
 
+    const classifyRes = await fetch("/api/classify/reels/visual", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items }),
+    });
+
+    const classifyData = await classifyRes.json();
+    console.log("Frontend visual classification result:", classifyData);
+    return classifyData;
+  }
 
 async function runSearch() {
   const platform = document.getElementById("platformSelect").value;
@@ -943,6 +977,7 @@ async function runSearch() {
 }
 
 const saveBtn = document.getElementById("saveBtn");
+const classifyBtn = document.getElementById("classifyBtn");
 
 function updateBoxResultsFromDOM(boxEl) {
   const items = Array.from(boxEl.querySelectorAll(".tile")).map((a) => {
@@ -1069,6 +1104,17 @@ saveBtn.addEventListener("click", () => {
     console.error(err);
     alert("Save failed. Check console.");
   });
+});
+
+classifyBtn.addEventListener("click", async () => {
+  try {
+    const result = await classifyVisibleReels();
+    console.log("Classify button result:", result);
+    alert("Frontend test classification finished. Check the console for details.");
+  } catch (err) {
+    console.error(err);
+    alert("Frontend test classification failed. Check console.");
+  }
 });
 
 // Load saved board ONCE on startup. While it loads, disable Search so we don't
