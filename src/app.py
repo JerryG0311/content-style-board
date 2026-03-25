@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 
 from fastapi import Response
 from fastapi.responses import StreamingResponse
-from urllib.parse import unquote
+from urllib.parse import unquote, quote
 
 load_dotenv()
 
@@ -885,6 +885,407 @@ def search_posts_index(platform: str, style: str, niche: str = "", limit: int = 
         )
     return out
 
+
+# --- Instagram seed account collector ---
+
+def build_instagram_session_headers(referer_url: str = "https://www.instagram.com/") -> tuple[dict, dict]:
+    """
+    Build headers/cookies for authenticated Instagram web requests.
+    These env vars are optional. If absent, requests still run in public mode.
+
+    Supported env vars:
+      INSTAGRAM_SESSIONID
+      INSTAGRAM_CSRFTOKEN
+      INSTAGRAM_DS_USER_ID
+      INSTAGRAM_MID
+      INSTAGRAM_IG_DID
+      INSTAGRAM_RUR
+    """
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36",
+        "Accept": "*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+        "Referer": referer_url,
+        # This app id is commonly used by the Instagram web app.
+        "X-IG-App-ID": os.getenv("INSTAGRAM_X_IG_APP_ID", "936619743392459"),
+        "X-ASBD-ID": os.getenv("INSTAGRAM_X_ASBD_ID", "129477"),
+        "X-Requested-With": "XMLHttpRequest",
+    }
+
+    csrftoken = (os.getenv("INSTAGRAM_CSRFTOKEN") or "").strip()
+    if csrftoken:
+        headers["X-CSRFToken"] = csrftoken
+
+    cookies = {}
+    cookie_env_map = {
+        "sessionid": "INSTAGRAM_SESSIONID",
+        "csrftoken": "INSTAGRAM_CSRFTOKEN",
+        "ds_user_id": "INSTAGRAM_DS_USER_ID",
+        "mid": "INSTAGRAM_MID",
+        "ig_did": "INSTAGRAM_IG_DID",
+        "rur": "INSTAGRAM_RUR",
+    }
+    for cookie_name, env_name in cookie_env_map.items():
+        value = (os.getenv(env_name) or "").strip()
+        if value:
+            cookies[cookie_name] = value
+
+    return headers, cookies
+
+
+
+def fetch_instagram_profile_api_payload(handle: str) -> dict:
+    """
+    First-class V1 collector source.
+    Attempts Instagram's web profile info endpoint using optional session cookies.
+    Returns {} on any failure so callers can safely fall back.
+    """
+    handle = (handle or "").strip().lstrip("@")
+    if not handle:
+        return {}
+
+    endpoint = f"https://www.instagram.com/api/v1/users/web_profile_info/?username={quote(handle)}"
+    headers, cookies = build_instagram_session_headers(f"https://www.instagram.com/{handle}/")
+
+    try:
+        r = requests.get(
+            endpoint,
+            headers=headers,
+            cookies=cookies,
+            timeout=20,
+            allow_redirects=True,
+        )
+        r.raise_for_status()
+        data = r.json()
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+
+def extract_post_urls_from_profile_api_payload(data: dict, max_posts: int = 12) -> list[str]:
+    """
+    Parse post/reel URLs from Instagram's web profile payload.
+    Supports a couple of payload shapes seen in the wild.
+    """
+    if not isinstance(data, dict):
+        return []
+
+    candidates = []
+
+    def append_shortcode(shortcode: str, is_video: bool = False):
+        shortcode = (shortcode or "").strip()
+        if not shortcode:
+            return
+        kind = "reel" if is_video else "p"
+        candidates.append(f"https://www.instagram.com/{kind}/{shortcode}/")
+
+    user = data.get("data", {}).get("user") if isinstance(data.get("data"), dict) else None
+    if isinstance(user, dict):
+        # GraphQL-ish shape
+        edges = (((user.get("edge_owner_to_timeline_media") or {}).get("edges"))
+                 if isinstance(user.get("edge_owner_to_timeline_media"), dict) else None)
+        if isinstance(edges, list):
+            for edge in edges:
+                node = edge.get("node") if isinstance(edge, dict) else None
+                if not isinstance(node, dict):
+                    continue
+                append_shortcode(node.get("shortcode") or "", bool(node.get("is_video")))
+
+        # tabs/media collections shape
+        for key in ("timeline_media", "edge_felix_video_timeline", "edge_saved_media"):
+            bucket = user.get(key)
+            if isinstance(bucket, dict):
+                edges2 = bucket.get("edges")
+                if isinstance(edges2, list):
+                    for edge in edges2:
+                        node = edge.get("node") if isinstance(edge, dict) else None
+                        if not isinstance(node, dict):
+                            continue
+                        append_shortcode(node.get("shortcode") or "", bool(node.get("is_video")))
+
+    # Some responses include a top-level items list.
+    items = data.get("items")
+    if isinstance(items, list):
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            append_shortcode(item.get("code") or item.get("shortcode") or "", bool(item.get("media_type") == 2))
+
+    seen = set()
+    out = []
+    for url in candidates:
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        out.append(url)
+        if len(out) >= max_posts:
+            break
+    return out
+
+def mark_seed_account_crawled(platform: str, handle: str) -> None:
+    platform = (platform or "").lower().strip()
+    handle = (handle or "").strip().lstrip("@")
+    now = utc_now_iso()
+    with get_db() as conn:
+        conn.execute(
+            """
+            UPDATE seed_accounts
+            SET last_crawled_at = ?
+            WHERE platform = ? AND handle = ?
+            """,
+            (now, platform, handle),
+        )
+
+
+
+def fetch_instagram_profile_post_urls(handle: str, max_posts: int = 12) -> list[str]:
+    """
+    Best-effort V1 collector for public Instagram profiles.
+    Reads the public profile page HTML and extracts /p/ and /reel/ links.
+    Instagram changes its HTML often, so we scan several patterns.
+    """
+    handle = (handle or "").strip().lstrip("@")
+    if not handle:
+        return []
+
+    profile_url = f"https://www.instagram.com/{handle}/"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+        "Referer": "https://www.instagram.com/",
+    }
+
+    try:
+        r = requests.get(profile_url, headers=headers, timeout=20, allow_redirects=True)
+        r.raise_for_status()
+        html = r.text or ""
+    except Exception:
+        return []
+
+    candidates = []
+
+    patterns = [
+        # Normal hrefs in server-rendered HTML
+        r'href=["\'](/(?:p|reel|reels)/[A-Za-z0-9_-]+/)["\']',
+        # JSON escaped relative paths like \/p\/ABC123\/
+        r'\\/(?:p|reel|reels)\\/[A-Za-z0-9_-]+\\/',
+        # Absolute Instagram URLs inside JSON/script blobs
+        r'https:\\/\\/www\.instagram\.com\\/(?:p|reel|reels)\\/[A-Za-z0-9_-]+\\/',
+        # Non-escaped absolute URLs
+        r'https://www\.instagram\.com/(?:p|reel|reels)/[A-Za-z0-9_-]+/',
+        # permalink fields in embedded JSON
+        r'"permalink"\s*:\s*"(https?:\\/\\/www\.instagram\.com\\/(?:p|reel|reels)\\/[A-Za-z0-9_-]+\\/)"',
+        # Plain shortcode fields in JSON blobs
+        r'"shortcode"\s*:\s*"([A-Za-z0-9_-]+)"',
+        # mediaType hint next to shortcode (2=video/reel, 8=carousel, 1=image)
+        r'"code"\s*:\s*"([A-Za-z0-9_-]+)"',
+    ]
+
+    for pattern in patterns:
+        matches = re.findall(pattern, html, flags=re.IGNORECASE)
+        if not matches:
+            continue
+        if isinstance(matches[0], tuple):
+            for tup in matches:
+                for item in tup:
+                    if item:
+                        candidates.append(item)
+        else:
+            candidates.extend(matches)
+
+    # Secondary extraction path: build URLs from shortcode/mediaType JSON when
+    # Instagram does not expose direct permalinks in the HTML.
+    shortcode_entries = []
+
+    # Example shapes seen in IG HTML blobs:
+    #   "shortcode":"ABC123"
+    #   "mediaType":8
+    # or
+    #   "code":"ABC123"
+    #   "media_type":2
+    pair_patterns = [
+        re.compile(r'"shortcode"\s*:\s*"([A-Za-z0-9_-]+)".{0,200}?"mediaType"\s*:\s*(\d+)', re.IGNORECASE | re.DOTALL),
+        re.compile(r'"mediaType"\s*:\s*(\d+).{0,200}?"shortcode"\s*:\s*"([A-Za-z0-9_-]+)"', re.IGNORECASE | re.DOTALL),
+        re.compile(r'"code"\s*:\s*"([A-Za-z0-9_-]+)".{0,200}?"media_type"\s*:\s*(\d+)', re.IGNORECASE | re.DOTALL),
+        re.compile(r'"media_type"\s*:\s*(\d+).{0,200}?"code"\s*:\s*"([A-Za-z0-9_-]+)"', re.IGNORECASE | re.DOTALL),
+    ]
+
+    for rx in pair_patterns:
+        for m in rx.findall(html):
+            if not m:
+                continue
+            if isinstance(m, tuple) and len(m) == 2:
+                a, b = m
+                # normalize whether regex returned (shortcode, mediaType) or reverse
+                if str(a).isdigit():
+                    media_type = int(a)
+                    shortcode = str(b)
+                else:
+                    shortcode = str(a)
+                    media_type = int(b) if str(b).isdigit() else 0
+                shortcode_entries.append((shortcode, media_type))
+
+    for shortcode, media_type in shortcode_entries:
+        if not shortcode:
+            continue
+        kind = "reel" if media_type == 2 else "p"
+        candidates.append(f"https://www.instagram.com/{kind}/{shortcode}/")
+
+    # Final fallback: if we only saw plain shortcodes with no media type,
+    # assume /p/ so we at least collect likely post URLs.
+    plain_shortcodes = re.findall(r'"shortcode"\s*:\s*"([A-Za-z0-9_-]+)"', html, flags=re.IGNORECASE)
+    for shortcode in plain_shortcodes:
+        if shortcode:
+            candidates.append(f"https://www.instagram.com/p/{shortcode}/")
+
+    seen = set()
+    out = []
+
+    for raw in candidates:
+        raw = (raw or "").strip()
+        if not raw:
+            continue
+
+        # Unescape JSON-style URLs
+        normalized = raw.replace('\\/', '/')
+
+        # Convert relative paths to full URLs
+        if normalized.startswith("/"):
+            full_url = f"https://www.instagram.com{normalized}"
+        else:
+            full_url = normalized
+
+        # Final sanity check
+        if not re.search(r'https://www\.instagram\.com/(?:p|reel|reels)/[A-Za-z0-9_-]+/', full_url, flags=re.IGNORECASE):
+            continue
+
+        # Skip obvious non-post URLs and malformed placeholders.
+        if any(x in full_url for x in ("/explore/", "/accounts/", "/stories/", "/reels/")):
+            continue
+        if full_url in seen:
+            continue
+        seen.add(full_url)
+        out.append(full_url)
+
+        if len(out) >= max_posts:
+            break
+
+    return out
+
+
+def debug_fetch_instagram_profile(handle: str) -> dict:
+    handle = (handle or "").strip().lstrip("@")
+    if not handle:
+        return {"ok": False, "error": "handle is required"}
+
+    profile_url = f"https://www.instagram.com/{handle}/"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+        "Referer": "https://www.instagram.com/",
+    }
+
+    try:
+        r = requests.get(profile_url, headers=headers, timeout=20, allow_redirects=True)
+        status_code = r.status_code
+        final_url = str(r.url or profile_url)
+        html = r.text or ""
+        content_type = r.headers.get("Content-Type", "")
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    debug_file = DATA_DIR / f"debug_{handle}.html"
+    try:
+        debug_file.write_text(html, encoding="utf-8")
+    except Exception:
+        pass
+
+    api_payload = fetch_instagram_profile_api_payload(handle)
+    api_file = DATA_DIR / f"debug_{handle}_api.json"
+    try:
+        if api_payload:
+            api_file.write_text(json.dumps(api_payload, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+    extracted_html = fetch_instagram_profile_post_urls(handle, max_posts=20)
+    extracted_api = extract_post_urls_from_profile_api_payload(api_payload, max_posts=20)
+
+    return {
+        "ok": True,
+        "handle": handle,
+        "profile_url": profile_url,
+        "final_url": final_url,
+        "status_code": status_code,
+        "content_type": content_type,
+        "html_length": len(html),
+        "saved_html": str(debug_file),
+        "saved_api_payload": str(api_file) if api_payload else "",
+        "api_payload_present": bool(api_payload),
+        "extracted_html_count": len(extracted_html),
+        "extracted_html": extracted_html[:20],
+        "extracted_api_count": len(extracted_api),
+        "extracted_api": extracted_api[:20],
+        "html_preview": html[:1000],
+    }
+
+
+
+def collect_instagram_seed_account(handle: str, niche: str = "", max_posts: int = 12) -> list:
+    handle = (handle or "").strip().lstrip("@")
+    niche = (niche or "").strip()
+
+    # Prefer the authenticated/session-aware API payload when available.
+    api_payload = fetch_instagram_profile_api_payload(handle)
+    urls = extract_post_urls_from_profile_api_payload(api_payload, max_posts=max_posts)
+
+    # Fall back to public HTML extraction only if the API path yielded nothing.
+    if not urls:
+        urls = fetch_instagram_profile_post_urls(handle, max_posts=max_posts)
+
+    created = []
+
+    for post_url in urls:
+        path = (urlparse(post_url).path or "").lower()
+        tag = "carousel" if "/p/" in path else "single-clip"
+
+        unfurled = unfurl_url(post_url)
+        title = ""
+        preview_url = ""
+        if unfurled.get("ok"):
+            title = (unfurled.get("title") or "").strip()
+            preview_url = (unfurled.get("image") or "").strip()
+
+        # If the unfurled title is generic or empty, fall back to something deterministic.
+        if not title or title.lower() in ("instagram", "instagram post"):
+            shortcode = shortcode_from_url(post_url)
+            title = f"{handle} {shortcode}".strip()
+
+        row = upsert_post(
+            platform="instagram",
+            post_url=post_url,
+            title=title,
+            description="",
+            tag=tag,
+            preview_url=preview_url,
+            account_handle=handle,
+            niche=niche,
+        )
+        created.append(row)
+
+    mark_seed_account_crawled("instagram", handle)
+    return created
+
 class BoardPlayload(BaseModel):
     board: list
 
@@ -963,48 +1364,62 @@ def api_upsert_post(payload: PostPayload):
     except ValueError as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
     
+
+@app.get("/api/debug/instagram_profile")
+def api_debug_instagram_profile(handle: str = ""):
+    result = debug_fetch_instagram_profile(handle)
+    if not result.get("ok"):
+        return JSONResponse(result, status_code=400)
+    return result
+
+
 @app.post("/api/crawl/seed_accounts")
 def crawl_seed_accounts():
     """
-    Stub crawler:
+    V1 real collector:
     - Reads seed accounts from DB
-    - Generates fake posts for each
-    Inserts into posts table 
+    - For Instagram seeds, fetches the public profile page
+    - Extracts /p/ and /reel/ URLs
+    - Upserts collected posts into the posts table
+    - Updates last_crawled_at on each seed account
     """
-
     seeds = list_seed_accounts()
     if not seeds:
-        return {"ok": True, "message": "No seed accounts found", "created": 0}
-    
+        return {"ok": True, "message": "No seed accounts found", "seed_accounts": 0, "posts_created": 0, "posts": []}
+
     created = []
+    summary = []
 
     for seed in seeds:
-        handle = seed.get("handle")
-        platform = seed.get("platform")
+        handle = seed.get("handle") or ""
+        platform = (seed.get("platform") or "").lower().strip()
         niche = seed.get("niche") or ""
 
-        # Fake posts (simulate discovery)
+        if platform != "instagram":
+            summary.append({
+                "platform": platform,
+                "handle": handle,
+                "created": 0,
+                "skipped": True,
+                "reason": "platform_not_supported_yet",
+            })
+            continue
 
-        for i in range(3):
-            fake_url = f"https://www.instagram.com/p/FAKE{handle.upper()}{i}/"
-
-            post = upsert_post(
-                platform=platform,
-                post_url=fake_url,
-                title=f"{handle} post #{i+1}",
-                description=f"Generated post for {niche}",
-                tag="carousel",
-                preview_url="",
-                account_handle=handle,
-                niche=niche,
-            )
-
-            created.append(post)
+        rows = collect_instagram_seed_account(handle=handle, niche=niche, max_posts=12)
+        created.extend(rows)
+        summary.append({
+            "platform": platform,
+            "handle": handle,
+            "created": len(rows),
+            "skipped": False,
+            "collector": "instagram_web_profile_info_then_html_fallback",
+        })
 
     return {
         "ok": True,
         "seed_accounts": len(seeds),
         "posts_created": len(created),
+        "summary": summary,
         "posts": created,
     }
 
