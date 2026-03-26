@@ -6,13 +6,16 @@ from fastapi.responses import FileResponse, JSONResponse
 from pathlib import Path
 from pydantic import BaseModel
 from json import JSONDecodeError
+
 import json
+import base64
 import requests
 import hashlib
 import time
 import re
 import sqlite3
 import subprocess
+
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
@@ -2250,7 +2253,9 @@ def classify_reel_from_visual_signals(
     sampled = max(0, int(sampled_frames or 0))
     has_face = bool(has_large_face)
 
-    if has_face and fr >= 0.18 and sc <= 0.35 and td <= 0.55:
+    # Talking-head reels can still have a lot of on-screen text/captions.
+    # So we should not reject them just because text_density is high.
+    if has_face and fr >= 0.18 and sc <= 0.35:
         confidence = min(0.95, 0.70 + (fr * 0.35) - (sc * 0.10))
         return ("talking-head", float(max(0.0, confidence)), "rendered_embed_visual_v1")
     
@@ -2480,13 +2485,35 @@ def api_debug_reel_frames(payload: ReelFramesPayload):
     try:
         video_path = download_instagram_reel_video(payload.post_url)
         frame_paths = extract_frames_from_video(video_path, fps=payload.fps)
+        frame_analysis = analyze_frames_with_ai(frame_paths)
+        classified_post_type, classifier_confidence, classifier_version = classify_reel_from_visual_signals(
+            text_density=frame_analysis.get("text_density", 0.0),
+            scene_change_score=frame_analysis.get("scene_change_score", 0.0),
+            face_ratio=frame_analysis.get("face_ratio", 0.0),
+            has_large_face=frame_analysis.get("has_large_face", False),
+            sampled_frames=len(frame_paths),
+        )
+
+        updated_post = None
+        if classified_post_type:
+            updated_post = update_post_classification_by_url(
+                post_url=payload.post_url,
+                classified_post_type=classified_post_type,
+                classifier_confidence=classifier_confidence,
+                classifier_version=f"{classifier_version}:openai_frames_v1",
+            )
 
         return {
             "ok": True,
             "post_url": payload.post_url,
             "video_path": video_path,
             "frames_extracted": len(frame_paths),
-            "frame_paths": frame_paths,
+            "analysis": frame_analysis,
+            "classified_post_type": classified_post_type,
+            "classifier_confidence": classifier_confidence,
+            "classifier_version": f"{classifier_version}:openai_frames_v1" if classified_post_type else "",
+            "db_updated": bool(updated_post),
+            "updated_post": updated_post,
         }
     except Exception as e:
         return JSONResponse(
@@ -2494,6 +2521,95 @@ def api_debug_reel_frames(payload: ReelFramesPayload):
             status_code=400,
         )
 
+
+def analyze_frames_with_ai(frame_paths: list[str]) -> dict:
+    """
+    Send sampled frames to OpenAI Vision for classification.
+    """
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY is not set")
+    
+    sample = frame_paths[:6]
+
+    images = []
+    for path in sample:
+        with open(path, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode("utf-8")
+            images.append({
+                "type": "input_image",
+                "image_url": f"data:image/jpeg;base64,{b64}",
+            })
+    
+    prompt = """
+You are classifying a short-form vertical video.
+
+Return ONLY a JSON object with:
+- text_density (0.0 to 1.0)
+- scene_change_score (0.0 to 1.0)
+- face_ratio (0.0 to 1.0)
+- has_large_face (true/false)
+
+Guidelines:
+- text_density = how much text is on screen across frames
+- scene_change_score = how often scenes change
+- face_ratio = how dominant a face is across frames
+- has_large_face = is a face taking up large portion of frame
+"""
+    response = requests.post(
+        "https://api.openai.com/v1/responses",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": "gpt-4.1-mini",
+            "input": [
+                {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": prompt}] + images,
+                }
+            ],
+        },
+        timeout=60,
+    )
+
+    if not response.ok:
+        raise RuntimeError(
+            f"OpenAI Responses API error {response.status_code}: {(response.text or '').strip()}"
+        )
+    
+    data = response.json()
+    text = data.get("output_text") or ""
+    if not text:
+        try:
+            output_items = data.get("output") or []
+            for item in output_items:
+                if item.get("type") != "message":
+                    continue
+                for content_item in item.get("content") or []:
+                    if content_item.get("type") == "output_text":
+                        text = (content_item.get("text") or "").strip()
+                        if text:
+                            break
+                if text:
+                    break
+        except Exception:
+            text = ""
+    if not text:
+        raise RuntimeError(f"Invalid AI response payload: {json.dumps(data)[:2000]}")
+    text = text.strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if lines and lines[0].strip().startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+    try:
+        return json.loads(text)
+    except Exception:
+        raise RuntimeError(f"Invalid AI response text: {text}")
 
 
 @app.get("/")
