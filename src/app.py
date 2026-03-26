@@ -16,20 +16,23 @@ import re
 import sqlite3
 import subprocess
 
-from contextlib import contextmanager
-from datetime import datetime, timezone
 
 from fastapi import Response
 from fastapi.responses import StreamingResponse
 from urllib.parse import unquote, quote
+from .jobs import (
+    JOB_CLASSIFY_REEL_VIDEO,
+    create_crawl_job,
+    publish_rabbitmq_job,
+    get_db,
+    utc_now_iso,
+)
 
 load_dotenv()
 
 
 app = FastAPI(title="Content Style Board")
 
-def utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 from urllib.parse import urlparse
 
@@ -619,16 +622,6 @@ BOARD_FILE = DATA_DIR / "board.json"
 
 DB_FILE = DATA_DIR / "app.db"
 
-@contextmanager
-def get_db():
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_FILE)
-    conn.row_factory = sqlite3.Row
-    try:
-        yield conn
-        conn.commit()
-    finally:
-        conn.close()
 
 
 def init_db() -> None:
@@ -1488,55 +1481,77 @@ def classify_reel_row(row: sqlite3.Row) -> tuple[str, float, str]:
     return ("", 0.0, "")
 
 @app.post("/api/classify/reels")
-def api_classify_reels(limit: int = 100):
+def api_classify_reels(limit: int = 10, fps: float = 1.0):
+    """
+    Main production async classifier entry point.
+
+    This route no longer performs expensive classification work inline.
+    Instead it:
+    1. finds pending Instagram reels
+    2. creates tracking rows in SQLite
+    3. publishes one durable RabbitMQ job per reel
+
+    Actual processing is handled by a worker process.
+    """
     with get_db() as conn:
         rows = conn.execute(
             """
             SELECT *
             FROM posts
             WHERE platform = 'instagram'
-                AND post_type = 'reel'
-                AND (classified_post_type = '' OR classified_post_type IS NULL)
+              AND post_type = 'reel'
+              AND (classified_post_type = '' OR classified_post_type IS NULL)
             ORDER BY collected_at DESC, id DESC
             LIMIT ?
             """,
             (limit,),
         ).fetchall()
 
-        updated = []
-        now = utc_now_iso()
+    queued = []
 
-        for row in rows:
-            classified_post_type, confidence, version = classify_reel_row(row)
-            if not classified_post_type:
-                continue
+    for row in rows:
+        post_url = (row["post_url"] or "").strip()
+        if not post_url:
+            continue
 
-            conn.execute(
-                """
-                UPDATE posts
-                SET classified_post_type = ?,
-                    classifier_confidence = ?,
-                    classifier_version = ?,
-                    classified_at = ?
-                WHERE id = ?
-                """,
-                (classified_post_type, confidence, version, now, row["id"]),
-            )
+        job = create_crawl_job(
+            job_type=JOB_CLASSIFY_REEL_VIDEO,
+            target=post_url,
+            status="queued",
+        )
 
-            fresh = conn.execute(
-                "SELECT * FROM posts WHERE id = ?",
-                (row["id"],),
-            ).fetchone()
+        publish_rabbitmq_job(
+            job_type=JOB_CLASSIFY_REEL_VIDEO,
+            target=post_url,
+            payload={
+                "post_url": post_url,
+                "platform": row["platform"] or "instagram",
+                "account_handle": row["account_handle"] or "",
+                "niche": row["niche"] or "",
+                "fps": float(fps or 1.0),
+            },
+        )
 
-            if fresh:
-                updated.append(dict(fresh))
+        queued.append(job)
+
     return {
         "ok": True,
-        "classified": len(updated),
-        "posts": updated,
-        "classifier": "heuristic_text_v1",
-        "note": "This is the placeholder text classifier. Use /api/classify/reels/visual for rendered-embed visual writeback.",
+        "queued": len(queued),
+        "jobs": queued,
+        "job_type": JOB_CLASSIFY_REEL_VIDEO,
+        "mode": "async",
+        "note": "Jobs were enqueued to RabbitMQ. A worker process must consume and execute them.",
     }
+
+
+# Alias route for explicit video+AI classifier path
+@app.post("/api/classify/reels/video_ai")
+def api_classify_reels_video_ai(limit: int = 5, fps: float = 1.0):
+    """
+    Explicit alias for the main async RabbitMQ-backed reel classifier.
+    This calls the same enqueue path as /api/classify/reels.
+    """
+    return api_classify_reels(limit=limit, fps=fps)
 
 @app.get("/api/reels/pending_visual_classification")
 def api_pending_visual_classification(limit: int = 24):
@@ -2346,6 +2361,10 @@ def download_instagram_reel_video(post_url: str) -> str:
 
     output_template = str(media_dir / f"{stem}.%(ext)s")
 
+    final_path = media_dir / f"{stem}.mp4"
+    if final_path.exists():
+        return str(final_path.resolve())
+
     cmd = [
         "yt-dlp",
         "--no-playlist",
@@ -2366,11 +2385,10 @@ def download_instagram_reel_video(post_url: str) -> str:
         raise RuntimeError(
             f"yt-dlp failed: {(result.stderr or result.stdout or '').strip()}"
         )
-    
-    final_path = media_dir / f"{stem}.mp4"
+
     if not final_path.exists():
         raise RuntimeError(f"Expected merged video not found: {final_path}")
-    
+
     return str(final_path.resolve())
 
 def extract_frames_from_video(video_path: str, fps: float = 1.0) -> list[str]:
@@ -2394,11 +2412,9 @@ def extract_frames_from_video(video_path: str, fps: float = 1.0) -> list[str]:
     frames_dir = DATA_DIR / "frames" / video_file.stem
     frames_dir.mkdir(parents=True, exist_ok=True)
 
-    for old_file in frames_dir.glob("*.jpg"):
-        try:
-            old_file.unlink()
-        except Exception:
-            pass
+    existing_frames = sorted(str(p.resolve()) for p in frames_dir.glob("*.jpg"))
+    if existing_frames:
+        return existing_frames
 
     output_pattern = str(frames_dir / "frame_%03d.jpg")
 
@@ -2530,7 +2546,14 @@ def analyze_frames_with_ai(frame_paths: list[str]) -> dict:
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY is not set")
     
-    sample = frame_paths[:6]
+    max_frames = 6
+    if len(frame_paths) <= max_frames:
+        sample = frame_paths
+    else:
+        step = (len(frame_paths) - 1) / float(max_frames - 1)
+        sample_indexes = [round(i * step) for i in range(max_frames)]
+        sample = [frame_paths[i] for i in sample_indexes]
+    print("DEBUG AI FRAME SAMPLE:", sample)
 
     images = []
     for path in sample:
@@ -2564,6 +2587,7 @@ Guidelines:
         },
         json={
             "model": "gpt-4.1-mini",
+            "temperature": 0,
             "input": [
                 {
                     "role": "user",
