@@ -23,6 +23,7 @@ from urllib.parse import unquote, quote
 from .jobs import (
     JOB_CLASSIFY_REEL_VIDEO,
     create_crawl_job,
+    get_crawl_job,
     publish_rabbitmq_job,
     get_db,
     utc_now_iso,
@@ -679,7 +680,7 @@ def init_db() -> None:
                 error_message TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL,
                 started_at TEXT,
-                finished_at TEXT
+                finished_at TEXT,
                 retry_count INTEGER NOT NULL DEFAULT 0
             );
 
@@ -1582,6 +1583,129 @@ def api_classify_reels_video_ai(limit: int = 5, fps: float = 1.0):
     This calls the same enqueue path as /api/classify/reels.
     """
     return api_classify_reels(limit=limit, fps=fps)
+
+@app.get("/api/jobs/failed")
+def api_list_failed_jobs(limit: int = 50):
+    """
+    List recently failed async jobs.
+    """
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM crawl_jobs
+            WHERE status = 'failed'
+            ORDER BY COALESCE(finished_at, created_at) DESC, id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+
+    jobs = [dict(r) for r in rows]
+    return {
+        "ok": True,
+        "failed": len(jobs),
+        "jobs": jobs,
+    }
+
+@app.post("/api/jobs/{job_id}/retry")
+def api_retry_failed_job(job_id: int):
+    """
+    Retry failed job.
+    """
+    job = get_crawl_job(job_id)
+    if not job:
+        return {"ok": False, "error": "Job not found"}
+    if (job.get("status") or "").strip() != "failed":
+        return {"ok": False, "error": "Only failed jobs can be retried"}
+    
+    job_type = (job.get("job_type") or "").strip()
+    target = (job.get("target") or "").strip()
+    if job_type != JOB_CLASSIFY_REEL_VIDEO:
+        return {"ok": False, "error": f"Unsupported job_type: {job_type}"}
+    
+    with get_db() as conn:
+        existing = conn.execute(
+            """
+            SELECT id
+            FROM crawl_jobs
+            WHERE target = ?
+              AND job_type = ?
+              AND status IN ('queued', 'processing')
+            LIMIT 1
+            """,
+            (target, job_type),
+        ).fetchone()
+        if existing:
+            return {
+                "ok": True,
+                "queued": 0,
+                "skipped": True,
+                "reason": "already_active",
+                "existing_job_id": existing[0],
+            }
+
+        newer_completed = conn.execute(
+            """
+            SELECT id
+            FROM crawl_jobs
+            WHERE target = ?
+              AND job_type = ?
+              AND status = 'completed'
+              AND id > ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (target, job_type, job_id),
+        ).fetchone()
+        if newer_completed:
+            return {
+                "ok": True,
+                "queued": 0,
+                "skipped": True,
+                "reason": "newer_completed_job_exists",
+                "existing_job_id": newer_completed[0],
+            }
+
+        post_row = conn.execute(
+            "SELECT * FROM posts WHERE post_url = ? LIMIT 1",
+            (target,),
+        ).fetchone()
+
+    new_job = create_crawl_job(
+        job_type=job_type,
+        target=target,
+        status="queued",
+    )
+
+    payload = {
+        "job_id": new_job["id"],
+        "post_url": target,
+        "platform": "instagram",
+        "account_handle": "",
+        "niche": "",
+        "fps": 1.0,
+    }
+
+    if post_row:
+        payload.update({
+            "platform": post_row["platform"] or "instagram",
+            "account_handle": post_row["account_handle"] or "",
+            "niche": post_row["niche"] or "",
+        })
+    
+    publish_rabbitmq_job(
+        job_type=job_type,
+        target=target,
+        payload=payload,
+    )
+
+    return {
+        "ok": True,
+        "queued": 1,
+        "original_job_id": job_id,
+        "new_job": new_job,
+    }
 
 @app.get("/api/reels/pending_visual_classification")
 def api_pending_visual_classification(limit: int = 24):
