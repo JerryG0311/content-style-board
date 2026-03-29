@@ -680,6 +680,7 @@ def init_db() -> None:
                 created_at TEXT NOT NULL,
                 started_at TEXT,
                 finished_at TEXT
+                retry_count INTEGER NOT NULL DEFAULT 0
             );
 
             CREATE TABLE IF NOT EXISTS post_tags (
@@ -713,6 +714,16 @@ def init_db() -> None:
         if "classified_at" not in existing_cols:
             conn.execute(
                 "ALTER TABLE posts ADD COLUMN classified_at TEXT NOT NULL DEFAULT ''"
+            )
+        
+        existing_job_cols = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(crawl_jobs)").fetchall()
+        }
+
+        if "retry_count" not in existing_job_cols:
+            conn.execute(
+                "ALTER TABLE crawl_jobs ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0"
             )
 
 

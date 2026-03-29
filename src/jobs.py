@@ -46,8 +46,8 @@ def create_crawl_job(job_type: str, target: str, status: str = "queued") -> dict
     with get_db() as conn:
         conn.execute(
             """
-            INSERT INTO crawl_jobs (job_type, target, status, created_at)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO crawl_jobs (job_type, target, status, created_at, retry_count)
+            VALUES (?, ?, ?, ?, 0)
             """,
             (job_type, target, status, now),
         )
@@ -100,6 +100,42 @@ def update_crawl_job_status(
             (job_id,),
         ).fetchone()
     
+    return dict(row) if row else {}
+
+def get_crawl_job(job_id: int) -> dict:
+    """
+    Fetch one crawl_jobs row by id.
+    """
+    if not job_id:
+        raise ValueError("job_id is required")
+    
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM crawl_jobs WHERE id = ?",
+            (job_id,),
+        ).fetchone()
+    return dict(row) if row else {}
+
+def increment_crawl_job_retry(job_id: int) -> dict:
+    """
+    Increment retry_count for a job and return updated row.
+    """
+    if not job_id:
+        raise ValueError("job_id is required")
+    
+    with get_db() as conn:
+        conn.execute(
+            """
+            UPDATE crawl_jobs
+            SET retry_count = retry_count + 1
+            WHERE id = ?
+            """,
+            (job_id,),
+        )
+        row = conn.execute(
+            "SELECT * FROM crawl_jobs WHERE id = ?",
+            (job_id,),
+        ).fetchone()
     return dict(row) if row else {}
 
 
