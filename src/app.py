@@ -1514,6 +1514,24 @@ def api_classify_reels(limit: int = 10, fps: float = 1.0):
         if not post_url:
             continue
 
+        # Deduplication: do not enqueue the same reel if a queued or
+        # currently processing classification job already exists.
+        with get_db() as conn:
+            existing = conn.execute(
+                """
+                SELECT id
+                FROM crawl_jobs
+                WHERE target = ?
+                  AND job_type = ?
+                  AND status IN ('queued', 'processing')
+                LIMIT 1
+                """,
+                (post_url, JOB_CLASSIFY_REEL_VIDEO),
+            ).fetchone()
+
+        if existing:
+            continue
+
         job = create_crawl_job(
             job_type=JOB_CLASSIFY_REEL_VIDEO,
             target=post_url,
