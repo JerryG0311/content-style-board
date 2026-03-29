@@ -1524,6 +1524,7 @@ def api_classify_reels(limit: int = 10, fps: float = 1.0):
             job_type=JOB_CLASSIFY_REEL_VIDEO,
             target=post_url,
             payload={
+                "job_id": job["id"],
                 "post_url": post_url,
                 "platform": row["platform"] or "instagram",
                 "account_handle": row["account_handle"] or "",

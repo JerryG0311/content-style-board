@@ -1,5 +1,3 @@
-
-
 import os
 import json
 from typing import Optional
@@ -57,6 +55,51 @@ def create_crawl_job(job_type: str, target: str, status: str = "queued") -> dict
             "SELECT * FROM crawl_jobs ORDER BY id DESC LIMIT 1"
         ).fetchone()
 
+    return dict(row) if row else {}
+
+def update_crawl_job_status(
+        job_id: int,
+        status: str,
+        error_message: str = "",
+        started_at: str = "",
+        finished_at: str = "",
+) -> dict:
+    """
+    Update a crawl_jobs row as work moves through the worker lifecycle.
+    """
+    if not job_id:
+        raise ValueError("job_id is required")
+    
+    status = (status or "").strip()
+    error_message = (error_message or "").strip()
+    started_at = (started_at or "").strip()
+    finished_at = (finished_at or "").strip()
+
+    with get_db() as conn:
+        conn.execute(
+            """
+            UPDATE crawl_jobs
+            SET status = ?,
+                error_message = ?,
+                started_at = CASE WHEN ? <> '' THEN ? ELSE started_at END,
+                finished_at = CASE WHEN ? <> '' THEN ? ELSE finished_at END
+            WHERE id = ?
+            """,
+            (
+                status,
+                error_message,
+                started_at,
+                started_at,
+                finished_at,
+                finished_at,
+                job_id,
+            ),
+        )
+        row = conn.execute(
+            "SELECT * FROM crawl_jobs WHERE id = ?",
+            (job_id,),
+        ).fetchone()
+    
     return dict(row) if row else {}
 
 

@@ -8,10 +8,13 @@ from ..app import (
     update_post_classification_by_url,
 )
 
+from ..jobs import update_crawl_job_status, utc_now_iso
+
 def handle_classify_reel_video_job(payload: dict):
     """
     Worker handler for classifying a single Instagram reel.
     """
+    job_id = payload.get("job_id") or 0
     post_url = (payload.get("post_url") or "").strip()
     fps = float(payload.get("fps") or 1.0)
 
@@ -20,6 +23,13 @@ def handle_classify_reel_video_job(payload: dict):
         return
     
     print(f"Processing reel: {post_url}")
+
+    if job_id:
+        update_crawl_job_status(
+            job_id=job_id,
+            status="processing",
+            started_at=utc_now_iso(),
+        )
 
     try:
         video_path = download_instagram_reel_video(post_url)
@@ -41,9 +51,23 @@ def handle_classify_reel_video_job(payload: dict):
                 classifier_version=f"{classifier_version}:openai_frames_v1",
             )
         
+        if job_id:
+            update_crawl_job_status(
+                job_id=job_id,
+                status="completed",
+                finished_at=utc_now_iso(),
+            )
+        
         print(f"Done: {post_url} -> {classified_post_type}")
     
     except Exception as e:
+        if job_id:
+            update_crawl_job_status(
+                job_id=job_id,
+                status="failed",
+                error_message=str(e),
+                finished_at=utc_now_iso(),
+            )
         print(f"Worker failed for {post_url}")
         print(e)
         traceback.print_exc()
