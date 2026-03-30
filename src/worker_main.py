@@ -3,6 +3,7 @@ import json
 import pika
 
 from .workers.classify_reel_video import handle_classify_reel_video_job
+from .workers.crawl_instagram_account import handle_crawl_instagram_account_job
 
 RABBITMQ_URL = os.getenv(
     "RABBITMQ_URL",
@@ -28,6 +29,8 @@ def main():
 
             if job_type == "classify_reel_video":
                 handle_classify_reel_video_job(payload)
+            elif job_type == "crawl_instagram_account":
+                handle_crawl_instagram_account_job(payload)
             else:
                 print(f"Unknown job type: {job_type}")
             
