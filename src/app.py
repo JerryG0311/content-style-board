@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pathlib import Path
+from datetime import datetime, timezone, timedelta
 from pydantic import BaseModel
 from json import JSONDecodeError
 
@@ -25,9 +26,12 @@ from .jobs import (
     create_crawl_job,
     get_crawl_job,
     publish_rabbitmq_job,
+    update_crawl_job_status,
     get_db,
     utc_now_iso,
 )
+from .search_service import get_niche_health
+from .expansion_service import expand_niche_if_needed
 
 load_dotenv()
 
@@ -961,6 +965,9 @@ def search_posts_index(platform: str, style: str, niche: str = "", limit: int = 
     return out
 
 
+
+
+
 # --- Instagram seed account collector ---
 
 def build_instagram_session_headers(referer_url: str = "https://www.instagram.com/") -> tuple[dict, dict]:
@@ -1608,6 +1615,232 @@ def api_list_failed_jobs(limit: int = 50):
         "jobs": jobs,
     }
 
+@app.get("/api/jobs")
+def api_list_jobs(
+    status: str = "",
+    job_type: str = "",
+    limit: int = 50,
+):
+    """
+    List jobs with optional filtering by status and job_type.
+    """
+    where = []
+    params = []
+    if status:
+        where.append("status = ?")
+        params.append(status)
+    if job_type:
+        where.append("job_type = ?")
+        params.append(job_type)
+    
+    where_sql = ""
+    if where:
+        where_sql = "WHERE " + " AND ".join(where)
+    
+    query = f"""
+        SELECT *
+        FROM crawl_jobs
+        {where_sql}
+        ORDER BY COALESCE(finished_at, created_at) DESC, id DESC
+        LIMIT ?
+    """
+    params.append(limit)
+    with get_db() as conn:
+        rows = conn.execute(query, params).fetchall()
+    jobs = [dict(r) for r in rows]
+    
+    return {
+        "ok": True, 
+        "count": len(jobs),
+        "jobs": jobs,
+        "filters": {
+            "status": status,
+            "job_type": job_type,
+            "limit": limit,
+        },
+    }
+
+
+# --- Stale job inspection and recovery endpoints ---
+
+@app.get("/api/jobs/stale")
+def api_list_stale_jobs(stale_after_minutes: int = 15, limit: int = 50):
+    """
+    List jobs stuck in processing longer than the stale threshold.
+    """
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=stale_after_minutes)).isoformat()
+
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM crawl_jobs
+            WHERE status = 'processing'
+              AND started_at <> ''
+              AND started_at IS NOT NULL
+              AND started_at < ?
+            ORDER BY started_at ASC, id ASC
+            LIMIT ?
+            """,
+            (cutoff, limit),
+        ).fetchall()
+
+    jobs = [dict(r) for r in rows]
+    return {
+        "ok": True,
+        "stale": len(jobs),
+        "jobs": jobs,
+        "filters": {
+            "stale_after_minutes": stale_after_minutes,
+            "limit": limit,
+        },
+    }
+
+
+@app.post("/api/jobs/recover_stale")
+def api_recover_stale_jobs(stale_after_minutes: int = 15, limit: int = 25):
+    """
+    Recover stale processing jobs by marking them failed and, when safe,
+    creating a fresh queued job and publishing it to RabbitMQ.
+    """
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=stale_after_minutes)).isoformat()
+
+    with get_db() as conn:
+        stale_rows = conn.execute(
+            """
+            SELECT *
+            FROM crawl_jobs
+            WHERE status = 'processing'
+              AND started_at <> ''
+              AND started_at IS NOT NULL
+              AND started_at < ?
+            ORDER BY started_at ASC, id ASC
+            LIMIT ?
+            """,
+            (cutoff, limit),
+        ).fetchall()
+
+    recovered = []
+
+    for row in stale_rows:
+        stale_job = dict(row)
+        job_id = stale_job.get("id") or 0
+        job_type = (stale_job.get("job_type") or "").strip()
+        target = (stale_job.get("target") or "").strip()
+
+        if not job_id or not target or job_type != JOB_CLASSIFY_REEL_VIDEO:
+            continue
+
+        update_crawl_job_status(
+            job_id=job_id,
+            status="failed",
+            error_message="stale processing job recovered",
+            finished_at=utc_now_iso(),
+        )
+
+        with get_db() as conn:
+            existing = conn.execute(
+                """
+                SELECT id
+                FROM crawl_jobs
+                WHERE target = ?
+                  AND job_type = ?
+                  AND status IN ('queued', 'processing')
+                LIMIT 1
+                """,
+                (target, job_type),
+            ).fetchone()
+            if existing:
+                recovered.append(
+                    {
+                        "stale_job_id": job_id,
+                        "queued": 0,
+                        "skipped": True,
+                        "reason": "already_active",
+                        "existing_job_id": existing[0],
+                    }
+                )
+                continue
+
+            newer_completed = conn.execute(
+                """
+                SELECT id
+                FROM crawl_jobs
+                WHERE target = ?
+                  AND job_type = ?
+                  AND status = 'completed'
+                  AND id > ?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (target, job_type, job_id),
+            ).fetchone()
+            if newer_completed:
+                recovered.append(
+                    {
+                        "stale_job_id": job_id,
+                        "queued": 0,
+                        "skipped": True,
+                        "reason": "newer_completed_job_exists",
+                        "existing_job_id": newer_completed[0],
+                    }
+                )
+                continue
+
+            post_row = conn.execute(
+                "SELECT * FROM posts WHERE post_url = ? LIMIT 1",
+                (target,),
+            ).fetchone()
+
+        new_job = create_crawl_job(
+            job_type=job_type,
+            target=target,
+            status="queued",
+        )
+
+        payload = {
+            "job_id": new_job["id"],
+            "post_url": target,
+            "platform": "instagram",
+            "account_handle": "",
+            "niche": "",
+            "fps": 1.0,
+        }
+
+        if post_row:
+            payload.update(
+                {
+                    "platform": post_row["platform"] or "instagram",
+                    "account_handle": post_row["account_handle"] or "",
+                    "niche": post_row["niche"] or "",
+                }
+            )
+
+        publish_rabbitmq_job(
+            job_type=job_type,
+            target=target,
+            payload=payload,
+        )
+
+        recovered.append(
+            {
+                "stale_job_id": job_id,
+                "queued": 1,
+                "new_job": new_job,
+            }
+        )
+
+    return {
+        "ok": True,
+        "recovered": len(recovered),
+        "jobs": recovered,
+        "filters": {
+            "stale_after_minutes": stale_after_minutes,
+            "limit": limit,
+        },
+    }
+
+
 @app.post("/api/jobs/{job_id}/retry")
 def api_retry_failed_job(job_id: int):
     """
@@ -1880,11 +2113,9 @@ def search(
 ):
     platform = (platform or "instagram").lower().strip()
     style = (style or "carousel").lower().strip()
-
-    # First try the local SQLite index. If we already have matching posts,
-    # return them immediately and skip Brave.
     indexed_results = search_posts_index(platform=platform, style=style, niche=niche, limit=24)
-    if indexed_results:
+    niche_health = get_niche_health(platform=platform, style=style, niche=niche)
+    if indexed_results and niche_health.get("healthy"):
         resp = {
             "platform": platform,
             "style": style,
@@ -1896,289 +2127,64 @@ def search(
                 "source": "local_index",
                 "db": str(DB_FILE),
                 "count": len(indexed_results),
+                "niche_health": niche_health,
             }
         return resp
 
-    # 1) Build a base query
-    q = build_query(platform, style, niche=niche, seed=seed)
+    # If we reach here, we only use local DB results (no Brave fallback)
+    results = dedupe_and_truncate(indexed_results, limit=8) if indexed_results else []
 
-    # Brave can behave inconsistently for instagram.com queries depending on safesearch.
-    # We'll try "moderate" first, then retry with "off" when needed.
-    safe_primary = "moderate"
-    safe_fallback = "off" if platform == "instagram" else None
-
-    niche_hint = (niche or "").strip()
-    seed_hint = (seed or "").strip()
-
-    # Instagram is extra sensitive to query structure.
-    # We'll try a small set of progressively broader candidate queries.
-    candidate_queries = [q]
-
-    if platform == "instagram":
-        if style == "carousel":
-            candidate_queries += [
-                f"site:instagram.com/p/ {niche_hint} {seed_hint} -template -templates -canva -capcut -ugc -ads -advertising -marketing".strip(),
-                f"site:instagram.com/p/ {niche_hint} -template -templates -canva -capcut -ugc -ads -advertising -marketing".strip(),
-                f"instagram.com/p/ {niche_hint}".strip(),
-            ]
-        elif style in ("multi-clip", "single-clip"):
-            extra = "part 1" if style == "multi-clip" else "text overlay"
-            candidate_queries += [
-                f"site:instagram.com/reel/ {niche_hint} {seed_hint}".strip(),
-                f"site:instagram.com/reel/ {niche_hint} {extra}".strip(),
-                f"instagram.com/reel/ {niche_hint} {extra}".strip(),
-                "site:instagram.com/reel/ part 1",
-                "instagram.com/reel/",
-            ]
-
-    # de-dupe while preserving order
-    _seen_q = set()
-    candidate_queries = [cq for cq in candidate_queries if cq and not (cq in _seen_q or _seen_q.add(cq))]
-
-    dbg = {
-        "app_file": __file__,
-        "cwd": os.getcwd(),
-        "q": q,
-        "safesearch": safe_primary,
-        "brave_total": 0,
-        "attempts": [],
-        "filtered_tutorial_or_ads": 0,
-        "filtered_empty_url": 0,
-        "filtered_platform_mismatch": 0,
-        "kept": 0,
-        "sample_titles": [],
-        "rate_limited": False,
+    resp = {
+        "platform": platform,
+        "style": style,
+        "q": "local_index_only",
+        "results": results,
     }
 
-    def _do_brave(query: str, ss: str):
-        try:
-            # Brave Web Search API: count max is 20. Using >20 causes 422.
-            data = brave_web_search(query, count=20, safesearch=ss)
-            web = data.get("web", {}) or {}
-            results = web.get("results", []) or []
-            dbg["attempts"].append({"q": query, "safesearch": ss, "count": len(results)})
-            return results
-        except requests.HTTPError as e:
-            status = getattr(getattr(e, "response", None), "status_code", None)
-            dbg["attempts"].append({
-                "q": query,
-                "safesearch": ss,
-                "count": 0,
-                "error": f"{status} {str(e)}".strip(),
-            })
-            if status == 429:
-                dbg["rate_limited"] = True
-                return None  # sentinel so caller can stop retrying
-            return []
-        except Exception as e:
-            dbg["attempts"].append({
-                "q": query,
-                "safesearch": ss,
-                "count": 0,
-                "error": str(e),
-            })
-            return []
-
-    brave_results = []
-    used_q = q
-    used_safe = safe_primary
-
-    try:
-        # Try candidate queries until we get results.
-        for cq in candidate_queries:
-            used_q = cq
-
-            # 1) primary safesearch
-            brave_results = _do_brave(cq, safe_primary)
-            used_safe = safe_primary
-
-            # If we were rate-limited, stop trying more queries.
-            if brave_results is None:
-                brave_results = []
-                break
-
-            # 2) instagram retry with safesearch=off
-            if platform == "instagram" and len(brave_results) == 0 and safe_fallback:
-                brave_results = _do_brave(cq, safe_fallback)
-                used_safe = safe_fallback
-
-                if brave_results is None:
-                    brave_results = []
-                    break
-
-            if len(brave_results) > 0:
-                break
-
-    except Exception as exc:
-        print("Brave search failed:", str(exc))
-        brave_results = []
-
-    # Update q + safesearch to what actually ran (useful for debugging)
-    q = used_q
-    dbg["q"] = q
-    dbg["safesearch"] = used_safe
-    dbg["brave_total"] = len(brave_results)
-
-    # capture a few raw titles to sanity check what Brave returned
-    for it in brave_results[:5]:
-        dbg["sample_titles"].append(it.get("title") or it.get("url") or "")
-
-    # 3) Normalize + filter
-    normalized = []
-    for item in brave_results:
-        url = item.get("url") or ""
-        title = item.get("title") or url
-        description = item.get("description") or ""
-
-        if looks_like_tutorial_or_ads(title):
-            dbg["filtered_tutorial_or_ads"] += 1
-            continue
-
-        if not url:
-            dbg["filtered_empty_url"] += 1
-            continue
-
-        if not url_matches_platform(url, platform, style):
-            dbg["filtered_platform_mismatch"] += 1
-            continue
-
-        thumb = extract_thumbnail(item)
-        if not thumb:
-            thumb = best_effort_unfurl_image(url)
-
-        normalized.append({
-            "title": title,
-            "url": url,
-            "platform": platform,
-            "tag": style,  # UI-facing tag (derived), raw stored separately
-            "description": description,
-            "thumbnail": thumb,
-        })
-
-    # 4) Dedupe + truncate
-    results = dedupe_and_truncate(normalized, limit=8)
-    dbg["kept"] = len(results)
-
-    # If requested, filter down to only the best matches (style match + niche match)
-    if best:
-        best_out = []
-        for r in results:
-            a = analyze_item(
-                url=r.get("url", ""),
-                title=r.get("title", ""),
-                description=r.get("description", ""),
-                platform=platform,
-                tag=style,
-                niche=niche,
-                seed=seed,
-            )
-            style_match = (a.get("style") or "").lower().strip() == (style or "").lower().strip()
-            niche_ok = (not (niche or "").strip()) or bool(a.get("niche_match"))
-            if style_match and niche_ok:
-                # carry analysis fields forward (optional, useful for UI/debug)
-                r["niche_score"] = a.get("niche_score")
-                r["niche_match"] = a.get("niche_match")
-                r["confidence"] = a.get("confidence")
-                r["is_tutorial_like"] = a.get("is_tutorial_like")
-                best_out.append(r)
-
-        results = dedupe_and_truncate(best_out, limit=8)
-        dbg["kept"] = len(results)
-
-    # 5) Fallback: if we got nothing, try a broader query (still platform-correct)
-
-    if len(results) == 0:
-        q2 = None
-
-        if platform == "instagram" and style == "multi-clip":
-            q2 = (
-                'site:instagram.com (inurl:/reel/ OR inurl:/reels/) '
-                '("part 1" OR "pt 1" OR "1/3" OR "2/3" OR "day 1" OR "day 2") '
-                '-tutorial -how -guide -tips -template'
-            )
-
-        if platform == "instagram" and style == "carousel" and not niche_hint:
-            # Only when niche is empty do we allow broad “carousel-ish” discovery.
-            q2 = (
-                'site:instagram.com/p/ '
-                '(swipe OR "slide 1" OR carousel OR "1/10" OR "1/7" OR "1/8") '
-                '-template -templates -canva -capcut -ugc -ads -advertising -marketing '
-                '-"carousel template" -"viral carousel" -"carousel ideas" -"hook ideas" '
-                '-"reel ideas" -"content strategy" -"social media strategy"'
-            )
-
-        if q2:
-            try:
-                # Brave Web Search API: count max is 20. Using >20 causes 422.
-                data2 = brave_web_search(q2, count=20, safesearch=safe_primary)
-                web2 = data2.get("web", {}) or {}
-                brave_results2 = web2.get("results", []) or []
-            except Exception as exc:
-                print("Brave fallback failed:", str(exc))
-                brave_results2 = []
-
-            normalized2 = []
-            for item in brave_results2:
-                url = item.get("url") or ""
-                title = item.get("title") or url
-                description = item.get("description") or ""
-
-                if not url:
-                    continue
-                if not url_matches_platform(url, platform, style):
-                    continue
-                if looks_like_tutorial_or_ads(title):
-                    continue
-
-                thumb = extract_thumbnail(item)
-                if not thumb:
-                    thumb = best_effort_unfurl_image(url)
-
-                normalized2.append(
-                    {
-                        "title": title,
-                        "url": url,
-                        "platform": platform,
-                        "tag": style,
-                        "description": description,
-                        "thumbnail": thumb,
-                    }
-                )
-
-            # THIS WAS MISSING: actually use the fallback results
-            results = dedupe_and_truncate(normalized2, limit=8)
-
-            if best:
-                best_out2 = []
-                for r in results:
-                    a = analyze_item(
-                        url=r.get("url", ""),
-                        title=r.get("title", ""),
-                        description=r.get("description", ""),
-                        platform=platform,
-                        tag=style,
-                        niche=niche,
-                        seed=seed,
-                    )
-                    style_match = (a.get("style") or "").lower().strip() == (style or "").lower().strip()
-                    niche_ok = (not (niche or "").strip()) or bool(a.get("niche_match"))
-                    if style_match and niche_ok:
-                        r["niche_score"] = a.get("niche_score")
-                        r["niche_match"] = a.get("niche_match")
-                        r["confidence"] = a.get("confidence")
-                        r["is_tutorial_like"] = a.get("is_tutorial_like")
-                        best_out2.append(r)
-
-                results = dedupe_and_truncate(best_out2, limit=8)
-
-            # optional: show which query we ended up using
-            if len(results) > 0:
-                q = q2
-
-    resp = {"platform": platform, "style": style, "q": q, "results": results}
     if debug:
-        resp["debug"] = dbg
+        resp["debug"] = {
+            "source": "local_index_only",
+            "db": str(DB_FILE),
+            "local_index_count": len(indexed_results),
+            "niche_health": niche_health,
+            "used_local_only": True,
+            "note": "Brave search fully removed. Results are DB-only.",
+        }
+
     return resp
+@app.post("/api/expand/niche")
+def api_expand_niche(
+    platform: str = "instagram",
+    style: str = "",
+    niche: str = "",
+    limit: int = 10,
+):
+    """
+    Expand local niche coverage by discovering accounts, adding missing seeds,
+    and enqueueing crawl jobs for those accounts.
+    """
+
+    platform = (platform or "instagram").lower().strip()
+    style = (style or "").lower().strip()
+    niche = (niche or "").strip()
+    limit = int(limit or 10)
+    if not niche:
+        return {
+            "ok": False,
+            "expanded": False,
+            "reason": "niche_required",
+            "discovered_accounts": [],
+            "seed_results": [],
+            "crawl_jobs": [],
+        }
+    
+    return expand_niche_if_needed(
+        platform=platform,
+        style=style,
+        niche=niche,
+        limit=limit,
+    )
+
 
 from typing import Optional, Dict, Any, List
 from urllib.parse import urlparse
