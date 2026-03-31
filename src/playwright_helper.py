@@ -35,14 +35,23 @@ def fetch_instagram_posts_playwright(handle: str, max_posts: int = 12):
         page.mouse.wheel(0, 5000)
         page.wait_for_timeout(2000)
 
-        links = page.query_selector_all("a")
+        links = page.query_selector_all('a[href*="/p/"], a[href*="/reel/"]')
         print("Total links found:", len(links))
         for link in links:
-            href = link.get_attribute("href") or ""
-            if "/p/" in href or "/reel/" in href:
+            href = (link.get_attribute("href") or "").strip()
+            if not href:
+                continue
+            if href.startswith("http"):
+                full_url = href
+            else:
                 full_url = f"https://www.instagram.com{href}"
-                if full_url not in posts:
-                    posts.append(full_url)
+            expected_prefix = f"https://www.instagram.com/{handle}/"
+            if not full_url.startswith(expected_prefix):
+                continue
+            if not "/p/" in full_url and "/reel/" not in full_url:
+                continue
+            if full_url not in posts:
+                posts.append(full_url)
             if len(posts) >= max_posts:
                 break
         

@@ -663,6 +663,7 @@ def init_db() -> None:
                 preview_url TEXT NOT NULL DEFAULT '',
                 embed_url TEXT NOT NULL DEFAULT '',
                 niche TEXT NOT NULL DEFAULT '',
+                profile_rank INTEGER NOT NULL DEFAULT 999999,
                 collected_at TEXT NOT NULL,
                 created_at TEXT NOT NULL
             );
@@ -719,6 +720,10 @@ def init_db() -> None:
         if "classified_at" not in existing_cols:
             conn.execute(
                 "ALTER TABLE posts ADD COLUMN classified_at TEXT NOT NULL DEFAULT ''"
+            )
+        if "profile_rank" not in existing_cols:
+            conn.execute(
+                "ALTER TABLE posts ADD COLUMN profile_rank INTEGER NOT NULL DEFAULT 999999"
             )
         
         existing_job_cols = {
@@ -811,6 +816,7 @@ def upsert_post(
     preview_url: str = "",
     account_handle: str = "",
     niche: str = "",
+    profile_rank: int = 999999,
     classified_post_type: str = "",
     classifier_confidence: float = 0.0,
     classifier_version: str = "",
@@ -823,6 +829,7 @@ def upsert_post(
     preview_url = (preview_url or "").strip()
     account_handle = (account_handle or "").strip().lstrip("@")
     niche = (niche or "").strip()
+    profile_rank = int(profile_rank if profile_rank is not None else 999999)
     classified_post_type = (classified_post_type or "").strip()
     classifier_version = (classifier_version or "").strip()
 
@@ -842,14 +849,19 @@ def upsert_post(
     classified_at = now if classified_post_type else ""
 
     with get_db() as conn:
+        existing = conn.execute(
+            "SELECT id FROM posts WHERE post_url = ?",
+            (post_url,),
+        ).fetchone()
+
         conn.execute(
             """
             INSERT INTO posts (
                 platform, account_handle, post_url, shortcode, post_type,
                 classified_post_type, classifier_confidence, classifier_version, classified_at,
-                caption, preview_mode, preview_url, embed_url, niche,
+                caption, preview_mode, preview_url, embed_url, niche, profile_rank,
                 collected_at, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(post_url) DO UPDATE SET
                 platform = excluded.platform,
                 account_handle = excluded.account_handle,
@@ -876,6 +888,7 @@ def upsert_post(
                 preview_url = excluded.preview_url,
                 embed_url = excluded.embed_url,
                 niche = excluded.niche,
+                profile_rank = excluded.profile_rank,
                 collected_at = excluded.collected_at
             """,
             (
@@ -893,14 +906,42 @@ def upsert_post(
                 preview_url,
                 embed_url,
                 niche,
+                profile_rank,
                 now,
                 now,
             ),
         )
         row = conn.execute("SELECT * FROM posts WHERE post_url = ?", (post_url,)).fetchone()
 
-    return dict(row) if row else {}
+    out = dict(row) if row else {}
+    if out:
+        out["_was_inserted"] = existing is None
+    return out
 
+def post_exists(post_url: str) -> bool:
+    post_url = (post_url or "").strip()
+    if not post_url:
+        return False
+    
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM posts WHERE post_url = ? LIMIT 1",
+            (post_url,),
+        ).fetchone()
+    
+    return row is not None 
+
+def update_post_profile_rank(post_url: str, profile_rank: int) -> None:
+    post_url = (post_url or "").strip()
+    profile_rank = int(profile_rank if profile_rank is not None else 999999)
+    if not post_url:
+        return 
+    
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE posts SET profile_rank = ? WHERE post_url = ?",
+            (profile_rank, post_url),
+        )
 
 def search_posts_index(platform: str, style: str, niche: str = "", limit: int = 24) -> list:
     platform = (platform or "").lower().strip()
@@ -1205,7 +1246,48 @@ def mark_seed_account_crawled(platform: str, handle: str) -> None:
             (now, platform, handle),
         )
 
+def prune_posts_for_account(platform: str, handle: str, keep_posts: int = 24) -> int:
+    platform = (platform or "").lower().strip()
+    handle = (handle or "").strip().lstrip("@")
+    keep_posts = int(keep_posts or 24)
 
+    if not platform or not handle or keep_posts <= 0:
+        return 0
+    
+    with get_db() as conn:
+        before_row = conn.execute(
+            "SELECT COUNT(*) FROM posts WHERE platform = ? AND account_handle = ?",
+            (platform, handle),
+        ).fetchone()
+        before_count = int(before_row[0] or 0) if before_row else 0
+        
+        conn.execute(
+            """
+            DELETE FROM posts
+            WHERE platform = ?
+                AND account_handle = ?
+                AND id NOT IN (
+                    SELECT id
+                    FROM posts
+                    WHERE platform = ?
+                        AND account_handle = ?
+                    ORDER BY profile_rank ASC, collected_at DESC, id DESC
+                    LIMIT ?
+                )
+            """,
+            (platform, handle, platform, handle, keep_posts),
+        )
+
+        after_row = conn.execute(
+            "SELECT COUNT(*) FROM posts WHERE platform = ? AND account_handle = ?",
+            (platform, handle),
+        ).fetchone()
+        after_count = int(after_row[0] or 0) if after_row else 0
+    
+    deleted = max(before_count - after_count, 0)
+    if deleted > 0:
+        print(f"[PRUNE] Removed {deleted} old posts for @{handle}; kept newest {keep_posts}")
+    return deleted
 
 def fetch_instagram_profile_post_urls(handle: str, max_posts: int = 12) -> list[str]:
     """
@@ -1441,32 +1523,38 @@ def debug_fetch_instagram_profile(handle: str) -> dict:
 
 
 
-def collect_instagram_seed_account(handle: str, niche: str = "", max_posts: int = 12) -> list:
+def collect_instagram_seed_account(handle: str, niche: str = "", max_posts: int = 12, keep_posts: int = 24) -> list:
     handle = (handle or "").strip().lstrip("@")
     niche = (niche or "").strip()
 
     urls = []
+    fetch_window = max(int(max_posts or 12) * 4, 24)
 
     # 1. Primary: extract post/reel URLs from the public profile HTML.
-    urls = fetch_instagram_profile_post_urls(handle, max_posts=max_posts)
+    urls = fetch_instagram_profile_post_urls(handle, max_posts=fetch_window)
 
     # 2. Secondary: try the authenticated profile API if HTML yields nothing.
     if not urls:
         api_payload = fetch_instagram_profile_api_payload(handle)
-        urls = extract_post_urls_from_profile_api_payload(api_payload, max_posts=max_posts)
+        urls = extract_post_urls_from_profile_api_payload(api_payload, max_posts=fetch_window)
     
     if not urls:
         print(f"[Playwright fallback] Fetching posts for @{handle}")
         from .playwright_helper import fetch_instagram_posts_playwright
-        urls = fetch_instagram_posts_playwright(handle, max_posts=max_posts)
+        urls = fetch_instagram_posts_playwright(handle, max_posts=fetch_window)
 
     if not urls:
         print(f"[yt-dlp fallback] Fetching posts for @{handle}")
-        urls = fetch_instagram_posts_via_ytdlp(handle, max_posts=max_posts)
+        urls = fetch_instagram_posts_via_ytdlp(handle, max_posts=fetch_window)
 
     created = []
 
-    for post_url in urls:
+    for rank, post_url in enumerate(urls):
+        if post_exists(post_url):
+            update_post_profile_rank(post_url, rank)
+            print(f"[SKIP existing] {post_url}")
+            continue
+
         path = (urlparse(post_url).path or "").lower()
         tag = "carousel" if "/p/" in path else "reel"
         print("DEBUG COLLECT TAG:", post_url, "->", tag)
@@ -1492,13 +1580,18 @@ def collect_instagram_seed_account(handle: str, niche: str = "", max_posts: int 
             preview_url=preview_url,
             account_handle=handle,
             niche=niche,
+            profile_rank=rank,
             classified_post_type="carousel" if tag == "carousel" else "",
             classifier_confidence=0.99 if tag == "carousel" else 0.0,
             classifier_version="raw_structural_v1" if tag == "carousel" else "",
         )
-        created.append(row)
+        if row.get("_was_inserted"):
+            created.append(row)
+            if len(created) >= max_posts:
+                break
 
     mark_seed_account_crawled("instagram", handle)
+    prune_posts_for_account("instagram", handle, keep_posts=keep_posts)
     return created
 
 class BoardPlayload(BaseModel):
@@ -2193,7 +2286,7 @@ def crawl_seed_accounts():
             })
             continue
 
-        rows = collect_instagram_seed_account(handle=handle, niche=niche, max_posts=12)
+        rows = collect_instagram_seed_account(handle=handle, niche=niche, max_posts=12, keep_posts=24)
         created.extend(rows)
         summary.append({
             "platform": platform,
