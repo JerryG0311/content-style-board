@@ -8,6 +8,7 @@ def handle_crawl_instagram_account_job(payload: dict):
     job_id = payload.get("job_id") or 0
     platform = (payload.get("platform") or "").lower().strip()
     handle = (payload.get("handle") or "").strip().lstrip("@")
+    niche = (payload.get("niche") or "").strip()
     if platform != "instagram":
         raise ValueError(f"Unsupported platform: {platform}")
     if not handle:
@@ -20,7 +21,7 @@ def handle_crawl_instagram_account_job(payload: dict):
         )
     
     try:
-        collect_instagram_seed_account(handle)
+        collect_instagram_seed_account(handle=handle, niche=niche)
         if job_id:
             update_crawl_job_status(
                 job_id=job_id,

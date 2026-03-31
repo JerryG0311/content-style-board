@@ -1018,34 +1018,109 @@ def build_instagram_session_headers(referer_url: str = "https://www.instagram.co
 
 
 
+def profile_api_payload_has_media(data: dict) -> bool:
+    """
+    Return True when the Instagram profile payload clearly contains media edges.
+    """
+    if not isinstance(data, dict):
+        return False
+
+    try:
+        edges = (((data.get("data") or {}).get("user") or {}).get("edge_owner_to_timeline_media") or {}).get("edges") or []
+        if isinstance(edges, list) and len(edges) > 0:
+            return True
+    except Exception:
+        pass
+
+    return False
+
 def fetch_instagram_profile_api_payload(handle: str) -> dict:
     """
     First-class V1 collector source.
-    Attempts Instagram's web profile info endpoint using optional session cookies.
+    Attempts Instagram's web profile info endpoint using authenticated session headers/cookies.
     Returns {} on any failure so callers can safely fall back.
     """
     handle = (handle or "").strip().lstrip("@")
     if not handle:
         return {}
 
-    endpoint = f"https://www.instagram.com/api/v1/users/web_profile_info/?username={quote(handle)}"
-    headers, cookies = build_instagram_session_headers(f"https://www.instagram.com/{handle}/")
+    url = "https://www.instagram.com/api/v1/users/web_profile_info/"
+    params = {"username": handle}
+
+    headers, cookies = build_instagram_session_headers(
+        referer_url=f"https://www.instagram.com/{handle}/"
+    )
+
+    cookie_parts = []
+    for cookie_name in ("sessionid", "csrftoken", "ds_user_id", "mid", "ig_did", "rur"):
+        cookie_value = (cookies.get(cookie_name) or "").strip()
+        if cookie_value:
+            cookie_parts.append(f"{cookie_name}={cookie_value}")
+
+    if cookie_parts:
+        headers["Cookie"] = "; ".join(cookie_parts)
+
 
     try:
         r = requests.get(
-            endpoint,
+            url,
+            params=params,
             headers=headers,
-            cookies=cookies,
             timeout=20,
             allow_redirects=True,
         )
         r.raise_for_status()
         data = r.json()
-        return data if isinstance(data, dict) else {}
-    except Exception:
-        return {}
+        if profile_api_payload_has_media(data):
+            return data
+    except Exception as e:
+        print(f"[fetch_instagram_profile_api_payload][requests] failed for @{handle}: {e}")
 
+    # Fallback: use the exact curl-style request path that already proved to work
+    # in the terminal for this endpoint.
+    try:
+        curl_cmd = [
+            "curl",
+            "-s",
+            f"{url}?username={handle}",
+            "-H",
+            f"X-IG-App-ID: {headers.get('X-IG-App-ID', '')}",
+            "-H",
+            f"X-ASBD-ID: {headers.get('X-ASBD-ID', '')}",
+            "-H",
+            "X-Requested-With: XMLHttpRequest",
+            "-H",
+            f"X-CSRFToken: {(cookies.get('csrftoken') or '').strip()}",
+            "-H",
+            f"Referer: https://www.instagram.com/{handle}/",
+        ]
 
+        if cookie_parts:
+            curl_cmd.extend(["-b", "; ".join(cookie_parts)])
+
+        result = subprocess.run(
+            curl_cmd,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+
+        raw = (result.stdout or "").strip()
+
+        try:
+            DATA_DIR.mkdir(parents=True, exist_ok=True)
+            (DATA_DIR / f"debug_{handle}_curl_raw.json").write_text(raw, encoding="utf-8")
+            (DATA_DIR / f"debug_{handle}_curl_stderr.txt").write_text(result.stderr or "", encoding="utf-8")
+        except Exception:
+            pass
+
+        if raw:
+            data = json.loads(raw)
+            return data if isinstance(data, dict) else {}
+    except Exception as e:
+        print(f"[fetch_instagram_profile_api_payload][curl fallback] failed for @{handle}: {e}")
+
+    return {}
 
 def extract_post_urls_from_profile_api_payload(data: dict, max_posts: int = 12) -> list[str]:
     """
@@ -1066,7 +1141,6 @@ def extract_post_urls_from_profile_api_payload(data: dict, max_posts: int = 12) 
 
     user = data.get("data", {}).get("user") if isinstance(data.get("data"), dict) else None
     if isinstance(user, dict):
-        # GraphQL-ish shape
         edges = (((user.get("edge_owner_to_timeline_media") or {}).get("edges"))
                  if isinstance(user.get("edge_owner_to_timeline_media"), dict) else None)
         if isinstance(edges, list):
@@ -1075,8 +1149,6 @@ def extract_post_urls_from_profile_api_payload(data: dict, max_posts: int = 12) 
                 if not isinstance(node, dict):
                     continue
                 append_shortcode(node.get("shortcode") or "", bool(node.get("is_video")))
-
-        # tabs/media collections shape
         for key in ("timeline_media", "edge_felix_video_timeline", "edge_saved_media"):
             bucket = user.get(key)
             if isinstance(bucket, dict):
@@ -1088,13 +1160,25 @@ def extract_post_urls_from_profile_api_payload(data: dict, max_posts: int = 12) 
                             continue
                         append_shortcode(node.get("shortcode") or "", bool(node.get("is_video")))
 
-    # Some responses include a top-level items list.
     items = data.get("items")
     if isinstance(items, list):
         for item in items:
             if not isinstance(item, dict):
                 continue
             append_shortcode(item.get("code") or item.get("shortcode") or "", bool(item.get("media_type") == 2))
+    
+    def walk(obj):
+        if isinstance(obj, dict):
+            shortcode = obj.get("shortcode") or obj.get("code") or ""
+            is_video = bool(obj.get("is_video")) or bool(obj.get("media_type") == 2)
+            if shortcode:
+                append_shortcode(shortcode, is_video)
+            for value in obj.values():
+                walk(value)
+        elif isinstance(obj, list):
+            for item in obj:
+                walk(item)
+    walk(data)
 
     seen = set()
     out = []
@@ -1248,7 +1332,7 @@ def fetch_instagram_profile_post_urls(handle: str, max_posts: int = 12) -> list[
             continue
 
         # Skip obvious non-post URLs and malformed placeholders.
-        if any(x in full_url for x in ("/explore/", "/accounts/", "/stories/", "/reels/")):
+        if any(x in full_url for x in ("/explore/", "/accounts/", "/stories/")):
             continue
         if full_url in seen:
             continue
@@ -1260,6 +1344,40 @@ def fetch_instagram_profile_post_urls(handle: str, max_posts: int = 12) -> list[
 
     return out
 
+def fetch_instagram_posts_via_ytdlp(handle: str, max_posts: int = 12) -> list[str]:
+    handle = (handle or "").strip().lstrip("@")
+    if not handle:
+        return []
+    
+    url = f"https://www.instagram.com/{handle}/"
+    try:
+        result = subprocess.run(
+            [
+                "yt-dlp",
+                "--flat-playlist",
+                "--dump-json",
+                url,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+
+        lines = result.stdout.strip().split("\n")
+        urls = []
+        for line in lines:
+            if not line.strip():
+                continue
+            try:
+                data = json.loads(line)
+                post_url = data.get("url") or ""
+                if post_url.startswith("http"):
+                    urls.append(post_url)
+            except:
+                continue
+        return urls[:max_posts]
+    except Exception:
+        return []
 
 def debug_fetch_instagram_profile(handle: str) -> dict:
     handle = (handle or "").strip().lstrip("@")
@@ -1327,13 +1445,24 @@ def collect_instagram_seed_account(handle: str, niche: str = "", max_posts: int 
     handle = (handle or "").strip().lstrip("@")
     niche = (niche or "").strip()
 
-    # Prefer the authenticated/session-aware API payload when available.
-    api_payload = fetch_instagram_profile_api_payload(handle)
-    urls = extract_post_urls_from_profile_api_payload(api_payload, max_posts=max_posts)
+    urls = []
 
-    # Fall back to public HTML extraction only if the API path yielded nothing.
+    # 1. Primary: extract post/reel URLs from the public profile HTML.
+    urls = fetch_instagram_profile_post_urls(handle, max_posts=max_posts)
+
+    # 2. Secondary: try the authenticated profile API if HTML yields nothing.
     if not urls:
-        urls = fetch_instagram_profile_post_urls(handle, max_posts=max_posts)
+        api_payload = fetch_instagram_profile_api_payload(handle)
+        urls = extract_post_urls_from_profile_api_payload(api_payload, max_posts=max_posts)
+    
+    if not urls:
+        print(f"[Playwright fallback] Fetching posts for @{handle}")
+        from .playwright_helper import fetch_instagram_posts_playwright
+        urls = fetch_instagram_posts_playwright(handle, max_posts=max_posts)
+
+    if not urls:
+        print(f"[yt-dlp fallback] Fetching posts for @{handle}")
+        urls = fetch_instagram_posts_via_ytdlp(handle, max_posts=max_posts)
 
     created = []
 

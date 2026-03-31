@@ -121,18 +121,16 @@ def build_instagram_discovery_headers(query: str = "") -> tuple[dict, dict]:
 
 def score_account_for_niche(niche: str, username: str, full_name: str, category: str = "") -> float:
     """
-    Simple production-safe relevance score for discovered Instagram accounts.
-    Higher when niche words appear in username/full name/category.
+    Niche relevance score for disovered Instagram accounts.
     """
     niche = (niche or "").lower().strip()
-    hay = " ".join([
-        (username or "").lower(),
-        (full_name or "").lower(),
-        (category or "").lower(),
-    ]).strip()
+    username = (username or "").lower().strip()
+    full_name = (full_name or "").lower().strip()
+    category = (category or "").lower().strip()
+    hay = " ".join([username, full_name, category]).strip()
     if not niche or not hay:
         return 0.0
-    
+
     niche_words = [w for w in niche.split() if w.strip()]
     if not niche_words:
         return 0.0
@@ -140,13 +138,27 @@ def score_account_for_niche(niche: str, username: str, full_name: str, category:
     score = 0.0
     if niche in hay:
         score += 0.6
+
+    matched_words = 0    
     for word in niche_words:
         if word in hay:
-            score += 0.2
-    for word in niche_words:
+            matched_words += 1
+            score += 0.15
         if hay.count(word) >= 2:
-            score += 0.1
-    
+            score += 0.05
+    if matched_words >= 2:
+        score += 0.15
+    if matched_words == len(niche_words) and len(niche_words) >= 2:
+        score += 0.15
+    if full_name and matched_words > 0:
+        score += 0.05
+    if category and matched_words > 0:
+        score += 0.05
+    if matched_words <= 1 and len(niche_words) >= 2:
+        score -= 0.15
+    if len(username) <= 8 and matched_words <= 1:
+        score -= 0.1
+
     return float(min(score, 1.0))
 
 def fetch_instagram_topsearch_accounts(query: str, limit: int = 10) -> list[dict]:
@@ -264,6 +276,7 @@ def discover_instagram_accounts_for_niche(niche: str, limit: int = 10) -> list[d
     scored.sort(
         key=lambda a: (
             float(a.get("niche_score") or 0.0),
+            len((a.get("full_name") or "").strip()),
             bool(a.get("is_verified")),
             not bool(a.get("is_private")),
             a.get("handle") or "",
@@ -272,4 +285,5 @@ def discover_instagram_accounts_for_niche(niche: str, limit: int = 10) -> list[d
     )
 
     fresh = filter_existing_seed_accounts("instagram", scored)
-    return fresh[:limit]
+    filtered = [a for a in fresh if float(a.get("niche_score") or 0.0) >= 0.35]
+    return filtered[:limit]
