@@ -943,6 +943,53 @@ def update_post_profile_rank(post_url: str, profile_rank: int) -> None:
             (profile_rank, post_url),
         )
 
+
+# --- Begin metadata backfill helpers for Instagram posts ---
+def get_post_by_url(post_url: str) -> dict:
+    post_url = (post_url or "").strip()
+    if not post_url:
+        return {}
+
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM posts WHERE post_url = ? LIMIT 1",
+            (post_url,),
+        ).fetchone()
+
+    return dict(row) if row else {}
+
+
+def existing_post_needs_metadata_refresh(row: dict) -> bool:
+    if not isinstance(row, dict) or not row:
+        return False
+
+    caption_raw = (row.get("caption") or "").strip()
+    caption = caption_raw.lower()
+
+    if not caption:
+        return True
+
+    if caption in ("instagram", "instagram post"):
+        return True
+
+    # Old placeholder shape like: "jonahhodges_ DS5mNhsEhkc"
+    if re.fullmatch(r"[a-z0-9._]+\s+[A-Za-z0-9_-]+", caption):
+        return True
+
+    # Fallback titles we generated ourselves are still weak metadata.
+    if re.fullmatch(r"@[a-z0-9._]+\s+•\s+instagram\s+(reel|post)", caption):
+        return True
+
+    # If the first line is just a bare shortcode-style placeholder, refresh it.
+    first_line = caption.splitlines()[0].strip() if caption else ""
+    if re.fullmatch(r"[a-z0-9._]+\s+[A-Za-z0-9_-]+", first_line):
+        return True
+
+    # Do NOT refresh only because preview_url is missing.
+    # Missing thumbnails are annoying, but repeated full Playwright fetches on every crawl
+    # are worse. Only re-fetch when the stored text metadata itself is clearly weak.
+    return False
+
 def search_posts_index(platform: str, style: str, niche: str = "", limit: int = 24) -> list:
     platform = (platform or "").lower().strip()
     style = (style or "").lower().strip()
@@ -974,7 +1021,7 @@ def search_posts_index(platform: str, style: str, niche: str = "", limit: int = 
         SELECT *
         FROM posts
         WHERE {' AND '.join(where)}
-        ORDER BY collected_at DESC, id DESC
+        ORDER BY profile_rank ASC, collected_at DESC, id DESC
         LIMIT ?
     """
     params.append(limit)
@@ -1245,6 +1292,31 @@ def mark_seed_account_crawled(platform: str, handle: str) -> None:
             """,
             (now, platform, handle),
         )
+
+
+# Helper: check if a seed account is in cooldown based on last_crawled_at and a cooldown in minutes
+def seed_account_is_in_cooldown(seed: dict, cooldown_minutes: int) -> bool:
+    if not isinstance(seed, dict):
+        return False
+
+    cooldown_minutes = int(cooldown_minutes or 0)
+    if cooldown_minutes <= 0:
+        return False
+
+    last_crawled_at = (seed.get("last_crawled_at") or "").strip()
+    if not last_crawled_at:
+        return False
+
+    try:
+        dt = datetime.fromisoformat(last_crawled_at)
+    except Exception:
+        return False
+
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+
+    age = datetime.now(timezone.utc) - dt
+    return age < timedelta(minutes=cooldown_minutes)
 
 def prune_posts_for_account(platform: str, handle: str, keep_posts: int = 24) -> int:
     platform = (platform or "").lower().strip()
@@ -1552,7 +1624,50 @@ def collect_instagram_seed_account(handle: str, niche: str = "", max_posts: int 
     for rank, post_url in enumerate(urls):
         if post_exists(post_url):
             update_post_profile_rank(post_url, rank)
-            print(f"[SKIP existing] {post_url}")
+
+            existing_row = get_post_by_url(post_url)
+            if existing_post_needs_metadata_refresh(existing_row):
+                path = (urlparse(post_url).path or "").lower()
+                existing_tag = "carousel" if "/p/" in path else "reel"
+
+                meta_title = ""
+                meta_preview_url = ""
+
+                try:
+                    from .playwright_helper import fetch_instagram_post_metadata_playwright
+                    meta = fetch_instagram_post_metadata_playwright(post_url)
+                    meta_title = (meta.get("title") or "").strip()
+                    meta_preview_url = (meta.get("preview_url") or "").strip()
+                except Exception:
+                    meta_title = ""
+                    meta_preview_url = ""
+
+                fallback_title = (
+                    f"@{handle} • Instagram Reel"
+                    if existing_tag == "reel"
+                    else f"@{handle} • Instagram Post"
+                )
+
+                refreshed_title = meta_title or fallback_title
+                refreshed_preview_url = meta_preview_url or (existing_row.get("preview_url") or "").strip()
+
+                upsert_post(
+                    platform="instagram",
+                    post_url=post_url,
+                    title=refreshed_title,
+                    description="",
+                    tag=existing_tag,
+                    preview_url=refreshed_preview_url,
+                    account_handle=handle,
+                    niche=niche,
+                    profile_rank=rank,
+                    classified_post_type="carousel" if existing_tag == "carousel" else "",
+                    classifier_confidence=0.99 if existing_tag == "carousel" else 0.0,
+                    classifier_version="raw_structural_v1" if existing_tag == "carousel" else "",
+                )
+                print(f"[REFRESH existing metadata] {post_url}")
+            else:
+                print(f"[SKIP existing] {post_url}")
             continue
 
         path = (urlparse(post_url).path or "").lower()
@@ -1565,11 +1680,30 @@ def collect_instagram_seed_account(handle: str, niche: str = "", max_posts: int 
         if unfurled.get("ok"):
             title = (unfurled.get("title") or "").strip()
             preview_url = (unfurled.get("image") or "").strip()
-
-        # If the unfurled title is generic or empty, fall back to something deterministic.
+        
+        needs_playwright_metadata = (
+            not preview_url
+            or not title 
+            or not title.lower() in ("instagram", "instagram post")
+        )
+        if needs_playwright_metadata:
+            try:
+                from .playwright_helper import fetch_instagram_post_metadata_playwright
+                meta = fetch_instagram_post_metadata_playwright(post_url)
+                if not title:
+                    title = (meta.get("title") or "").strip()
+                elif title.lower() in ("instagram", "instagram post"):
+                    title = (meta.get("title") or "").strip() or title 
+                if not preview_url:
+                    preview_url = (meta.get("preview_url") or "").strip()
+            except Exception:
+                pass
+       
         if not title or title.lower() in ("instagram", "instagram post"):
             shortcode = shortcode_from_url(post_url)
-            title = f"{handle} {shortcode}".strip()
+            title = f"@{handle} • Instagram Reel" if tag == "reel" else f"@{handle} • Instagram Post"
+            if not shortcode:
+                title = f"@{handle} • Instagram"
 
         row = upsert_post(
             platform="instagram",
@@ -2255,7 +2389,7 @@ def api_classify_reels_visual(payload: VisualClassificationBatchPayload):
 
 
 @app.post("/api/crawl/seed_accounts")
-def crawl_seed_accounts():
+def crawl_seed_accounts(crawl_cooldown_minutes: int = 60):
     """
     V1 real collector:
     - Reads seed accounts from DB
@@ -2266,8 +2400,16 @@ def crawl_seed_accounts():
     """
     seeds = list_seed_accounts()
     if not seeds:
-        return {"ok": True, "message": "No seed accounts found", "seed_accounts": 0, "posts_created": 0, "posts": []}
+        return {
+            "ok": True,
+            "message": "No seed accounts found",
+            "seed_accounts": 0,
+            "posts_created": 0,
+            "posts": [],
+            "crawl_cooldown_minutes": int(crawl_cooldown_minutes or 0),
+        }
 
+    crawl_cooldown_minutes = int(crawl_cooldown_minutes or 0)
     created = []
     summary = []
 
@@ -2283,6 +2425,18 @@ def crawl_seed_accounts():
                 "created": 0,
                 "skipped": True,
                 "reason": "platform_not_supported_yet",
+            })
+            continue
+
+        if seed_account_is_in_cooldown(seed, crawl_cooldown_minutes):
+            summary.append({
+                "platform": platform,
+                "handle": handle,
+                "created": 0,
+                "skipped": True,
+                "reason": "crawl_cooldown_active",
+                "last_crawled_at": seed.get("last_crawled_at") or "",
+                "crawl_cooldown_minutes": crawl_cooldown_minutes,
             })
             continue
 
@@ -2302,6 +2456,7 @@ def crawl_seed_accounts():
         "posts_created": len(created),
         "summary": summary,
         "posts": created,
+        "crawl_cooldown_minutes": crawl_cooldown_minutes,
     }
 
 # For local dev: allow the frontend to call the API easily

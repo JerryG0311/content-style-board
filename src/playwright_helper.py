@@ -58,3 +58,58 @@ def fetch_instagram_posts_playwright(handle: str, max_posts: int = 12):
         browser.close()
     
     return posts
+
+def fetch_instagram_post_metadata_playwright(post_url: str) -> dict:
+    post_url = (post_url or "").strip()
+    if not post_url:
+        return {"title": "", "preview_url": ""}
+    
+    from playwright.sync_api import sync_playwright
+
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page(viewport={"width": 1280, "height": 1600})
+            page.goto(post_url, wait_until="domcontentloaded", timeout=30000)
+            page.wait_for_timeout(2500)
+
+            title = ""
+            preview_url = ""
+
+            try:
+                title = (
+                    page.locator("meta[property='og:title']").first.get_attribute("content")
+                    or ""
+                ).strip()
+            except Exception:
+                title = ""
+            try:
+                preview_url = (
+                    page.locator("meta[property='og:image']").first.get_attribute("content")
+                    or ""
+                ).strip()
+            except Exception:
+                preview_url = ""
+            if not preview_url:
+                img_selectors = [
+                    "article img",
+                    "img[decoding='auto']",
+                    "img",
+                ]
+                for selector in img_selectors:
+                    try:
+                        img = page.locator(selector).first
+                        if img.count() > 0:
+                            src = (img.get_attribute("src") or "").strip()
+                            if src.startswith("http"):
+                                preview_url = src
+                                break
+                    except Exception:
+                        continue
+            browser.close()
+            return {
+                "title": title,
+                "preview_url": preview_url,
+            }
+    except Exception:
+        return {"title": "", "preview_url": ""}
