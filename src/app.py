@@ -31,7 +31,11 @@ from .jobs import (
 )
 from .search_service import get_niche_health
 from .expansion_service import expand_niche_if_needed
-from .discovery_service import discover_instagram_accounts_for_niche
+from .discovery_service import (
+    discover_instagram_accounts_for_niche,
+    expand_accounts_from_seed,
+    dedupe_discovered_accounts,
+)
 
 load_dotenv()
 
@@ -2219,11 +2223,27 @@ def bootstrap_niche_posts_sync(
         niche=niche,
         limit=discovery_limit,
     )
+
+    expanded_accounts = expand_accounts_from_seed(
+        platform=platform,
+        niche=niche,
+        limit=discovery_limit,
+    )
+
+    all_accounts = dedupe_discovered_accounts(
+        (discovered_accounts or []) + (expanded_accounts or [])
+    )
+
     crawled_handles = []
     errors = []
     created_posts = 0
 
-    for account in discovered_accounts[:crawl_accounts]:
+    for account in all_accounts[:crawl_accounts]:
+        if isinstance(account, sqlite3.Row):
+            account = dict(account)
+        elif not isinstance(account, dict):
+            account = {"handle": str(account or "")}
+
         handle = (account.get("handle") or "").strip().lstrip("@")
         if not handle:
             continue

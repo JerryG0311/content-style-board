@@ -342,3 +342,57 @@ def discover_instagram_accounts_for_niche(niche: str, limit: int = 10) -> list[d
     filtered = [a for a in annotated if float(a.get("niche_score") or 0.0) >= 0.35]
     print(f"[DISCOVERY] Filtered (niche score >= 0.35) count: {len(filtered)}")
     return filtered[:limit]
+
+def expand_accounts_from_seed(platform: str, niche: str, limit: int =20) -> list[dict]:
+    """
+    Expand discovery using already-seeded accounts.
+    Uses their handles as queries to find adjacent creators.
+    """
+
+    platform = (platform or "").lower().strip()
+
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT handle
+            FROM seed_accounts
+            WHERE platform = ?
+            ORDER BY RANDOM()
+            LIMIT 10
+            """,
+            [platform],
+        ).fetchall()
+
+    rows = [dict(row) for row in rows]
+    
+    seed_handles = [row["handle"] for row in rows if row.get("handle")]
+    print(f"[EXPANSION] Using {len(seed_handles)} seed accounts")
+
+    raw_accounts = []
+    for handle in seed_handles:
+        raw_accounts.extend(
+            fetch_instagram_topsearch_accounts(query=handle, limit=10)
+        )
+    print(f"[EXPANSION] Raw expanded accounts: {len(raw_accounts)}")
+
+    deduped = dedupe_discovered_accounts(raw_accounts)
+
+    scored = []
+    for account in deduped:
+        score = score_account_for_niche(
+            niche = niche,
+            username = account.get("handle") or "",
+            full_name = account.get("full_name") or "",
+            category = account.get("category") or "",
+        )
+        enriched = dict(account)
+        enriched["niche_score"] = score
+        scored.append(enriched)
+    
+    scored.sort(key=lambda a: float(a.get("niche_score") or 0.0), reverse=True)
+    annotated = annotate_existing_seed_accounts(platform, scored)
+    fresh = [a for a in annotated if not a.get("already_seeded")]
+
+    print(f"[EXPANSION] New accounts found: {len(fresh)}")
+
+    return fresh[:limit]
