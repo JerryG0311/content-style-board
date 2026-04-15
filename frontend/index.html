@@ -5,10 +5,14 @@
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>Content Style Board</title>
     <style>
+      * {
+        box-sizing: border-box;
+      }
       body {
         margin: 0;
         font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial;
         background: #f6f6fb;
+        min-height: 100vh;
         height: 100vh;
         overflow: hidden;
         display: flex;
@@ -22,7 +26,11 @@
         gap: 10px;
         align-items: center;
         flex-wrap: wrap;
-       }
+        flex: 0 0 auto;
+        position: sticky;
+        top: 0;
+        z-index: 1000;
+      }
       input { flex: 1; padding: 10px 12px; border: 1px solid #e6e6ef; border-radius: 10px; }
       #nicheInput, #seedInput {
         flex: 0 1 320px;
@@ -34,17 +42,214 @@
       }
       button { padding: 10px 12px; border: 1px solid #e6e6ef; background: white; border-radius: 10px; cursor: pointer; }
       main {
+        flex: 1 1 auto;
+        min-height: 0;
+        min-width: 0;
+        padding: 0;
+        display: flex;
+        overflow: hidden;
+      }
+
+      .workspace {
+        flex: 1 1 auto;
+        width: 100%;
+        min-width: 0;
+        min-height: 0;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 360px;
+        overflow: hidden;
+      }
+
+      .analysis-panel {
+        width: 360px;
+        min-width: 360px;
+        max-width: 360px;
+        background: #ffffff;
+        border-left: 1px solid #e6e6ef;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+        overflow: hidden;
+        position: relative;
+        z-index: 20;
+        visibility: visible;
+      }
+
+      .analysis-panel-header {
+        padding: 16px;
+        border-bottom: 1px solid #e6e6ef;
+      }
+
+      .analysis-panel-header h2 {
+        margin: 0;
+        font-size: 16px;
+        line-height: 1.2;
+      }
+
+      .analysis-panel-header p {
+        margin: 6px 0 0;
+        font-size: 13px;
+        color: #666;
+      }
+
+      .analysis-panel-body {
         flex: 1;
-        padding: 0; /* let the canvas fill the space */
-        min-height: 0; /* allows children to size correctly in a flex column layout */
+        min-height: 0;
+        overflow: auto;
+        padding: 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+      }
+
+      .analysis-empty {
+        border: 1px dashed #d8d8e6;
+        background: #fafafe;
+        border-radius: 14px;
+        padding: 16px;
+        color: #666;
+        font-size: 14px;
+        line-height: 1.5;
+      }
+
+      .analysis-card {
+        border: 1px solid #ececf4;
+        border-radius: 14px;
+        background: #fff;
+        overflow: hidden;
+      }
+
+      .analysis-preview {
+        width: 100%;
+        aspect-ratio: 9 / 16;
+        background: #111;
+        overflow: hidden;
+      }
+
+      .analysis-preview img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: block;
+      }
+
+      .analysis-meta {
+        padding: 14px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .analysis-title {
+        margin: 0;
+        font-size: 14px;
+        line-height: 1.4;
+        font-weight: 700;
+        color: #111;
+      }
+
+      .analysis-subtle {
+        font-size: 12px;
+        color: #666;
+      }
+
+      .analysis-grid {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+
+      .analysis-field {
+        border: 1px solid #ececf4;
+        border-radius: 12px;
+        padding: 12px;
+        background: #fff;
+      }
+
+      .analysis-label {
+        display: block;
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: #b4235a;
+        margin-bottom: 6px;
+      }
+
+      .analysis-value {
+        font-size: 14px;
+        line-height: 1.5;
+        color: #111;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      .analysis-list {
+        margin: 0;
+        padding-left: 18px;
+        color: #111;
+      }
+
+      .analysis-list li {
+        margin: 0 0 6px;
+        line-height: 1.5;
+      }
+
+      .tile.is-selected .tile-thumb {
+        outline: 3px solid rgba(180, 35, 90, 0.28);
+        outline-offset: 2px;
+      }
+
+      @media (max-width: 1100px) {
+        .workspace {
+          grid-template-columns: minmax(0, 1fr) 320px;
+        }
+
+        .analysis-panel {
+          width: 320px;
+          min-width: 320px;
+          max-width: 320px;
+        }
+      }
+
+      @media (max-width: 860px) {
+        body {
+          overflow: auto;
+          height: auto;
+          min-height: 100vh;
+        }
+
+        main {
+          overflow: visible;
+        }
+
+        .workspace {
+          display: flex;
+          flex-direction: column;
+          overflow: visible;
+        }
+
+        .board {
+          min-height: 70vh;
+        }
+
+        .analysis-panel {
+          width: 100%;
+          min-width: 0;
+          max-width: none;
+          border-left: 0;
+          border-top: 1px solid #e6e6ef;
+        }
       }
 
       /* Viewport (the visible window under the header) */
       .board {
         position: relative;
+        flex: 1 1 auto;
+        width: auto;
+        min-width: 0;
         height: 100%;
-        width: 100%;
-        overflow: hidden; /* we pan/zoom instead of scrolling */
+        overflow: hidden;
         background: #f7f8fc;
         user-select: none;
         cursor: grab;
@@ -99,11 +304,34 @@
         align-items: start;
       }
 
+      .group-empty {
+        grid-column: 1 / -1;
+        border: 1px dashed #f3b6cd;
+        border-radius: 16px;
+        background: #fff7fb;
+        color: #9c2c58;
+        padding: 14px 16px;
+        font-size: 13px;
+        line-height: 1.5;
+      }
+
+      .group-status {
+        grid-column: 1 / -1;
+        border: 1px solid #e7e4f6;
+        border-radius: 14px;
+        background: #f8f7fe;
+        color: #4d4a73;
+        padding: 12px 14px;
+        font-size: 13px;
+        line-height: 1.5;
+      }
+
       .tile {
         position: relative;
         display: block;
         text-decoration: none;
         background: transparent;
+        cursor: pointer;
         border: none;
       }
 
@@ -173,6 +401,7 @@
         background: #111;
         box-shadow: 0 10px 24px rgba(0,0,0,0.15);
         border: 1px solid #e6e6ef;
+        pointer-events: none;
       }
 
       .tile-thumb img {
@@ -180,6 +409,7 @@
         height: 100%;
         object-fit: cover;
         display: block;
+        pointer-events: none;
       }
 
       .tile-thumb iframe {
@@ -194,6 +424,7 @@
         height: 100%;
         overflow: hidden;
         background: #111;
+        pointer-events: none;
       }
 
       /* Instagram's embed iframe often has extra padding; scale it slightly to fill the tile */
@@ -202,6 +433,7 @@
         height: 115%;
         transform: scale(0.87);
         transform-origin: 0 0;
+        pointer-events: none;
       }
 
       .ig-embed-fallback {
@@ -270,14 +502,30 @@
   <select id="styleSelect"></select>
 
   <button id="searchBtn">Search</button>
-  <button id="classifyBtn">Classify Reels (Test)</button>
+  <button id="classifyBtn">Classify Reels</button>
   <button id="saveBtn">Save</button>
-</header>
-
+    </header>
+    <!-- Main workspace: board on the left, analysis panel pinned on the right -->
 
     <main>
-      <div id="board" class="board">
-        <div id="canvas" class="canvas">Board loading…</div>
+      <div class="workspace">
+        <div id="board" class="board">
+          <div id="canvas" class="canvas">Board loading…</div>
+        </div>
+
+        <aside id="analysisPanel" class="analysis-panel">
+          <div class="analysis-panel-header">
+            <h2>Post Analysis</h2>
+            <p>Select a post card to view its saved analysis.</p>
+          </div>
+          <div id="analysisPanelBody" class="analysis-panel-body">
+            <div class="analysis-empty">
+              Click any post card on the board to load its analysis.
+              <br /><br />
+              If that post has not been analyzed yet, you will see an empty state here instead.
+            </div>
+          </div>
+        </aside>
       </div>
     </main>
     <script>
@@ -286,16 +534,33 @@
   const searchBtn = document.getElementById("searchBtn");
   const nicheInput = document.getElementById("nicheInput");
   const seedInput = document.getElementById("seedInput");
+  const analysisPanelBody = document.getElementById("analysisPanelBody");
+  const analysisPanel = document.getElementById("analysisPanel");
+  const headerEl = document.querySelector("header");
+
+  window.addEventListener("load", () => {
+    console.log("UI boot", {
+      headerFound: !!headerEl,
+      analysisPanelFound: !!analysisPanel,
+      analysisPanelBodyFound: !!analysisPanelBody,
+      headerHeight: headerEl ? headerEl.offsetHeight : 0,
+      analysisPanelWidth: analysisPanel ? analysisPanel.offsetWidth : 0,
+      boardWidth: boardEl ? boardEl.offsetWidth : 0,
+      windowWidth: window.innerWidth,
+    });
+  });
 
   const STYLE_OPTIONS = {
   instagram: [
     { value: "carousel", label: "Carousel" },
     { value: "multi-clip", label: "Multi-clip text reel" },
     { value: "single-clip", label: "Single-clip text reel" },
+    { value: "talking-head", label: "Talking-head reel" },
   ],
   tiktok: [
     { value: "multi-clip", label: "Multi-clip text reel" },
     { value: "single-clip", label: "Single-clip text reel" },
+    { value: "talking-head", label: "Talking-head reel" },
   ],
   x: [
     { value: "post", label: "Post (short)" },
@@ -305,6 +570,7 @@
 
   let nextX = 24;
   let nextY = 24;
+  let selectedTile = null;
 
   // --- Infinite canvas (pan + zoom) ---
   let viewportX = 0;
@@ -565,7 +831,7 @@ platformSelect.addEventListener("change", () => {
 });
 
 
-  function createGroupBox(query, results, id) {
+  function createGroupBox(query, results, id, emptyMessage = "", statusText = "") {
     const box = document.createElement("div");
     box.dataset.id = id || crypto.randomUUID();
     box.dataset.query = query;
@@ -640,23 +906,46 @@ platformSelect.addEventListener("change", () => {
     const body = document.createElement("div");
     body.className = "group-box-body";
 
+    if (statusText) {
+      const statusEl = document.createElement("div");
+      statusEl.className = "group-status";
+      statusEl.textContent = statusText;
+      body.appendChild(statusEl);
+    }
+
+    if (!results.length) {
+      const emptyEl = document.createElement("div");
+      emptyEl.className = "group-empty";
+      emptyEl.textContent = emptyMessage || "No saved results for this search yet.";
+      body.appendChild(emptyEl);
+    }
+
     for (const item of results) {
       const url = item.url || "";
       const tag = item.tag || item.style || "";
       const platform = (item.platform || "unknown").toLowerCase();
+      const previewMode = (item.preview_mode || "").toLowerCase().trim();
+      const backendEmbedUrl = (item.embed_url || "").trim();
 
-      const tile = document.createElement("a");
+      const tile = document.createElement("div");
       tile.className = "tile";
-      tile.href = url;
-      tile.target = "_blank";
-      tile.rel = "noreferrer";
+      tile.setAttribute("role", "button");
+      tile.setAttribute("tabindex", "0");
+      tile.dataset.url = url;
 
       // datasets for Save()
       tile.dataset.title = item.title || url;
       tile.dataset.platform = item.platform || "";
       tile.dataset.tag = tag;
       tile.dataset.description = item.description || "";
-      tile.dataset.thumbnail = item.thumbnail || "";
+      tile.dataset.thumbnail = item.thumbnail || item.preview_url || item.previewUrl || "";
+      tile.dataset.previewUrl = item.preview_url || item.previewUrl || "";
+      tile.dataset.accountHandle = item.account_handle || "";
+      tile.dataset.niche = item.niche || "";
+      tile.dataset.postId = item.id || "";
+      tile.dataset.postUrl = url;
+      tile.dataset.previewMode = previewMode;
+      tile.dataset.embedUrl = backendEmbedUrl;
 
       // Top row: pill + actions
       const top = document.createElement("div");
@@ -695,7 +984,10 @@ platformSelect.addEventListener("change", () => {
       openBtn.addEventListener("click", (e) => {
         e.preventDefault();
         e.stopPropagation();
-        if (url && url.startsWith("http")) window.open(url, "_blank", "noreferrer");
+        const targetUrl = tile.dataset.postUrl || tile.dataset.url || "";
+        if (targetUrl && targetUrl.startsWith("http")) {
+          window.open(targetUrl, "_blank", "noreferrer");
+        }
       });
 
       // Delete button
@@ -734,47 +1026,60 @@ platformSelect.addEventListener("change", () => {
       top.appendChild(pill);
       top.appendChild(actions);
 
+      function canonicalInstagramPostUrl(originalUrl) {
+        try {
+          const u = new URL(originalUrl);
+          const match = u.pathname.match(/\/(p|reel|reels)\/([A-Za-z0-9_-]+)\/?/i);
+          if (!match) return originalUrl;
+
+          const kind = match[1].toLowerCase() === "reels" ? "reel" : match[1].toLowerCase();
+          const shortcode = match[2];
+          return `https://www.instagram.com/${kind}/${shortcode}/`;
+        } catch (e) {
+          return originalUrl;
+        }
+      }
+
       // Helper for Instagram embed URLs
       function instagramEmbedUrl(originalUrl) {
         try {
-          const u = new URL(originalUrl);
-          // Remove query/hash for stability
+          const canonicalUrl = canonicalInstagramPostUrl(originalUrl);
+          const u = new URL(canonicalUrl);
           u.search = "";
           u.hash = "";
 
-          // If it's already an embed URL, keep it
           if (u.pathname.includes("/embed")) {
             return u.toString();
           }
 
-          // Ensure trailing slash
           if (!u.pathname.endsWith("/")) u.pathname += "/";
-
-          // Instagram supports /p/<code>/embed/ and /reel/<code>/embed/
           return u.toString() + "embed/";
         } catch (e) {
           return "";
         }
       }
 
-      // Thumbnail / preview
-      const thumbUrl = item.thumbnail || "";
-
+      const thumbUrl = (item.thumbnail || item.preview_url || item.previewUrl || "").trim();
       const wrap = document.createElement("div");
       wrap.className = "tile-thumb";
 
-      // If this is an Instagram link, prefer the official embed iframe.
-      // This matches tools like poppy.ai (slide navigation works inside the card).
       const isInstagram = platform === "instagram" && url && url.includes("instagram.com");
-      const igEmbed = isInstagram ? instagramEmbedUrl(url) : "";
+      const canonicalPostUrl = isInstagram ? canonicalInstagramPostUrl(url) : url;
+      tile.dataset.url = canonicalPostUrl;
+      tile.dataset.postUrl = canonicalPostUrl;
+      const derivedEmbedUrl = isInstagram ? instagramEmbedUrl(canonicalPostUrl) : "";
+      const embedUrl = isInstagram
+        ? instagramEmbedUrl(backendEmbedUrl || canonicalPostUrl)
+        : (backendEmbedUrl || derivedEmbedUrl);
+      const shouldUseEmbed = !!embedUrl && (previewMode === "embed" || isInstagram);
 
-      if (igEmbed) {
+      if (isInstagram && shouldUseEmbed) {
         const embedWrap = document.createElement("div");
         embedWrap.className = "ig-embed-wrap";
 
         const iframe = document.createElement("iframe");
         iframe.className = "ig-embed";
-        iframe.src = igEmbed;
+        iframe.src = embedUrl;
         iframe.loading = "lazy";
         iframe.setAttribute("title", (item.title || "Instagram embed").trim());
         iframe.setAttribute(
@@ -785,17 +1090,70 @@ platformSelect.addEventListener("change", () => {
         iframe.setAttribute("referrerpolicy", "origin-when-cross-origin");
         iframe.setAttribute("scrolling", "no");
 
-        // If Instagram blocks the embed (private/removed/age-gated), the iframe can fail.
-        // We can’t reliably read the iframe DOM (cross-origin), but we *can* fall back when
-        // the iframe errors.
         iframe.addEventListener(
           "error",
           () => {
             embedWrap.innerHTML = "";
-            const fb = document.createElement("div");
-            fb.className = "ig-embed-fallback";
-            fb.innerHTML = "Preview unavailable (Instagram blocked the embed).<br/>Use the open button to view it on Instagram.";
-            embedWrap.appendChild(fb);
+
+            if (thumbUrl) {
+              const img = document.createElement("img");
+              img.alt = (item.title || "").trim();
+              img.loading = "lazy";
+              img.src = `/api/proxy?url=${encodeURIComponent(thumbUrl)}`;
+              img.addEventListener(
+                "error",
+                () => {
+                  img.src = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='540' height='960'%3E%3Crect width='100%25' height='100%25' fill='%23f1f1f6'/%3E%3Ctext x='50%25' y='50%25' dominant-baseline='middle' text-anchor='middle' fill='%23888' font-family='Arial' font-size='24'%3EPreview unavailable%3C/text%3E%3C/svg%3E";
+                },
+                { once: true }
+              );
+              embedWrap.appendChild(img);
+            } else {
+              const fallback = document.createElement("div");
+              fallback.className = "ig-embed-fallback";
+              fallback.textContent = "Preview unavailable";
+              embedWrap.appendChild(fallback);
+            }
+          },
+          { once: true }
+        );
+
+        embedWrap.appendChild(iframe);
+        wrap.appendChild(embedWrap);
+      } else if (thumbUrl) {
+        const img = document.createElement("img");
+        img.alt = (item.title || "").trim();
+        img.loading = "lazy";
+        img.src = `/api/proxy?url=${encodeURIComponent(thumbUrl)}`;
+        img.addEventListener(
+          "error",
+          () => {
+            img.src = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='540' height='960'%3E%3Crect width='100%25' height='100%25' fill='%23f1f1f6'/%3E%3Ctext x='50%25' y='50%25' dominant-baseline='middle' text-anchor='middle' fill='%23888' font-family='Arial' font-size='24'%3EPreview unavailable%3C/text%3E%3C/svg%3E";
+          },
+          { once: true }
+        );
+        wrap.appendChild(img);
+      } else if (shouldUseEmbed) {
+        const embedWrap = document.createElement("div");
+        embedWrap.className = "ig-embed-wrap";
+
+        const iframe = document.createElement("iframe");
+        iframe.className = "ig-embed";
+        iframe.src = embedUrl;
+        iframe.loading = "lazy";
+        iframe.setAttribute("title", (item.title || "Embed preview").trim());
+        iframe.setAttribute(
+          "sandbox",
+          "allow-scripts allow-same-origin allow-popups allow-forms allow-top-navigation-by-user-activation"
+        );
+        iframe.setAttribute("allow", "encrypted-media; fullscreen; picture-in-picture");
+        iframe.setAttribute("referrerpolicy", "origin-when-cross-origin");
+        iframe.setAttribute("scrolling", "no");
+
+        iframe.addEventListener(
+          "error",
+          () => {
+            embedWrap.innerHTML = "<div class=\"ig-embed-fallback\">Preview unavailable</div>";
           },
           { once: true }
         );
@@ -806,60 +1164,45 @@ platformSelect.addEventListener("change", () => {
         const img = document.createElement("img");
         img.alt = (item.title || "").trim();
         img.loading = "lazy";
-
-        // Start with Brave thumbnail if present (proxy it through our backend to avoid hotlink/CORS blocks)
-        if (thumbUrl) {
-          img.src = `/api/proxy?url=${encodeURIComponent(thumbUrl)}`;
-        } else {
-          // temporary placeholder (so layout is stable)
-          img.src = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='540' height='960'%3E%3Crect width='100%25' height='100%25' fill='%23111'/%3E%3Ctext x='50%25' y='50%25' dominant-baseline='middle' text-anchor='middle' fill='%23fff' font-family='Arial' font-size='28'%3ELoading preview%E2%80%A6%3C/text%3E%3C/svg%3E";
-
-          // Ask our backend to unfurl OG/Twitter image (iMessage-style)
-          // This avoids CORS because the server fetches the page.
-          (async () => {
-            try {
-              const u = encodeURIComponent(url);
-              const res = await fetch(`/api/unfurl?url=${u}`);
-              const data = await res.json();
-              if (res.ok && data.ok && data.image) {
-                // Proxy the OG image too (prevents 403/blocked images)
-                img.src = `/api/proxy?url=${encodeURIComponent(data.image)}`;
-
-                // Persist the *original* image URL so Save() keeps it (we proxy on render)
-                tile.dataset.thumbnail = data.image;
-                const boxEl = tile.closest(".group-box");
-                if (boxEl) updateBoxResultsFromDOM(boxEl);
-              } else {
-                // If unfurl returns no image, keep a simple placeholder message
-                img.src = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='540' height='960'%3E%3Crect width='100%25' height='100%25' fill='%23111'/%3E%3Ctext x='50%25' y='50%25' dominant-baseline='middle' text-anchor='middle' fill='%23fff' font-family='Arial' font-size='28'%3ENo preview%3C/text%3E%3C/svg%3E";
-              }
-            } catch (e) {
-              // leave placeholder
-            }
-          })();
-        }
-
-        img.addEventListener(
-          "error",
-          () => {
-            img.src = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='540' height='960'%3E%3Crect width='100%25' height='100%25' fill='%23111'/%3E%3Ctext x='50%25' y='50%25' dominant-baseline='middle' text-anchor='middle' fill='%23fff' font-family='Arial' font-size='24'%3EPreview blocked%3C/text%3E%3C/svg%3E";
-          },
-          { once: true }
-        );
-
+        img.src = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='540' height='960'%3E%3Crect width='100%25' height='100%25' fill='%23f1f1f6'/%3E%3Ctext x='50%25' y='50%25' dominant-baseline='middle' text-anchor='middle' fill='%23888' font-family='Arial' font-size='24'%3ENo preview data%3C/text%3E%3C/svg%3E";
         wrap.appendChild(img);
       }
       tile.appendChild(top);
       tile.appendChild(wrap);
       body.appendChild(tile);
 
+      tile.addEventListener("click", async (e) => {
+        if (e.target.closest(".icon-btn")) return;
+        e.preventDefault();
+        e.stopPropagation();
+
+        if (selectedTile) selectedTile.classList.remove("is-selected");
+        selectedTile = tile;
+        selectedTile.classList.add("is-selected");
+
+        await loadAnalysisForTile(tile);
+      });
+
+      tile.addEventListener("keydown", async (e) => {
+        if (e.key !== "Enter" && e.key !== " ") return;
+        if (e.target.closest(".icon-btn")) return;
+        e.preventDefault();
+        e.stopPropagation();
+
+        if (selectedTile) selectedTile.classList.remove("is-selected");
+        selectedTile = tile;
+        selectedTile.classList.add("is-selected");
+
+        await loadAnalysisForTile(tile);
+      });
       // Click-to-edit (keeps your current behavior)
       tile.addEventListener("dblclick", (e) => {
-        if (e.metaKey || e.ctrlKey) return;
         e.preventDefault();
+        e.stopPropagation();
+        if (e.metaKey || e.ctrlKey) return;
 
         const currentTitle = tile.dataset.title || "";
-        const currentUrl = tile.getAttribute("href") || "";
+        const currentUrl = tile.dataset.postUrl || "";
 
         const newTitle = prompt("Edit title:", currentTitle);
         if (newTitle === null) return;
@@ -873,7 +1216,7 @@ platformSelect.addEventListener("change", () => {
         }
 
         tile.dataset.title = newTitle.trim();
-        tile.setAttribute("href", newUrl.trim());
+        tile.dataset.postUrl = newUrl.trim();
 
         const pillTextEl = tile.querySelector(".tile-pill-text");
         if (pillTextEl) pillTextEl.textContent = newTitle.trim();
@@ -891,45 +1234,78 @@ platformSelect.addEventListener("change", () => {
     return box;
   }
 
-  // Step 1 frontend hook:
-  // This proves the frontend -> backend visual-classification pipeline works.
-  // For now, it sends temporary test signals for a few pending reels.
-  // Later, we will replace these fake values with real measurements from the rendered embeds.
-  async function classifyVisibleReels() {
-    const res = await fetch("/api/reels/pending_visual_classification?limit=3");
-    const data = await res.json();
+  function setGroupBoxStatus(boxEl, statusText = "", emptyMessage = "") {
+    if (!boxEl) return;
+    const body = boxEl.querySelector(".group-box-body");
+    if (!body) return;
 
-    const posts = Array.isArray(data.posts) ? data.posts : [];
-    if (!posts.length) {
-      console.log("No pending reels to classify.");
-      return;
+    let statusEl = body.querySelector(".group-status");
+    if (statusText) {
+      if (!statusEl) {
+        statusEl = document.createElement("div");
+        statusEl.className = "group-status";
+        body.prepend(statusEl);
+      }
+      statusEl.textContent = statusText;
+    } else if (statusEl) {
+      statusEl.remove();
     }
 
-    const items = posts.map((post) => ({
-      post_url: post.post_url,
+    const hasTiles = body.querySelectorAll(".tile").length > 0;
+    let emptyEl = body.querySelector(".group-empty");
+    if (!hasTiles) {
+      if (!emptyEl) {
+        emptyEl = document.createElement("div");
+        emptyEl.className = "group-empty";
+        body.appendChild(emptyEl);
+      }
+      if (emptyMessage) emptyEl.textContent = emptyMessage;
+    } else if (emptyEl) {
+      emptyEl.remove();
+    }
+  }
 
-      // TEMP TEST SIGNALS ONLY.
-      // These are placeholders so we can prove the pipeline works from the frontend.
-      text_density: Math.random(),
-      scene_change_score: Math.random(),
-      face_ratio: Math.random(),
-      has_large_face: Math.random() > 0.5,
-      sampled_frames: 6,
-      source: "frontend_v1",
-    }));
+  async function classifyVisibleReels(options = {}) {
+    const {
+      platform = document.getElementById("platformSelect").value,
+      niche = nicheInput.value.trim(),
+      style = document.getElementById("styleSelect").value,
+      limit = 6,
+      fps = 1.0,
+    } = options;
 
-    const classifyRes = await fetch("/api/classify/reels/visual", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ items }),
+    const params = new URLSearchParams({
+      platform,
+      niche,
+      style,
+      limit: String(limit),
+      fps: String(fps),
     });
 
+    const classifyRes = await fetch(`/api/classify/reels/true_visual?${params.toString()}`, {
+      method: "POST",
+    });
     const classifyData = await classifyRes.json();
-    console.log("Frontend visual classification result:", classifyData);
+    console.log("Frontend true visual classification result:", classifyData);
     return classifyData;
   }
 
-async function runSearch() {
+  async function autoClassifySubtypeResults(platform, style, niche) {
+    const normalizedStyle = (style || "").trim().toLowerCase();
+    if (!["single-clip", "multi-clip", "talking-head"].includes(normalizedStyle)) {
+      return { ok: true, updated: 0, skipped: true };
+    }
+    return classifyVisibleReels({
+      platform,
+      niche,
+      style,
+      limit: 18,
+      fps: 1.0,
+    });
+  }
+
+async function runSearch(options = {}) {
+  const { allowAutoClassify = true, loadingBox: existingLoadingBox = null } = options;
   const platform = document.getElementById("platformSelect").value;
   const style = document.getElementById("styleSelect").value;
 
@@ -943,10 +1319,18 @@ async function runSearch() {
 
   // Create loading box immediately (this is the per-search Saved box)
   const label = `Saved: ${platform} • ${style} • ${niche}`;
-  const loadingBox = createGroupBox(label, [
-    { title: "Loading…", url: "#", platform, tag: style }
-  ]);
-  canvasEl.appendChild(loadingBox);
+  const loadingBox = existingLoadingBox || createGroupBox(
+    label,
+    [],
+    undefined,
+    "Preparing results…",
+    "Searching saved local results…"
+  );
+  if (!existingLoadingBox) {
+    canvasEl.appendChild(loadingBox);
+  } else {
+    setGroupBoxStatus(loadingBox, "Searching saved local results…", "Preparing results…");
+  }
 
   try {
     const params = new URLSearchParams({
@@ -961,12 +1345,46 @@ async function runSearch() {
     const res = await fetch(`/api/search?${params.toString()}`);
     const data = await res.json();
 
-    loadingBox.remove();
-
     const results = Array.isArray(data.results) ? data.results : [];
 
+    if (!results.length && data.notice && allowAutoClassify) {
+      setGroupBoxStatus(
+        loadingBox,
+        "No classified matches yet. Running true visual classification on candidate reels…",
+        data.notice || "No saved results for this search yet."
+      );
+      const classifyData = await autoClassifySubtypeResults(platform, style, niche);
+      if ((classifyData?.attempted || 0) > 0) {
+        setGroupBoxStatus(
+          loadingBox,
+          `Visually inspected ${classifyData.attempted} reel(s). Refreshing search results…`,
+          ""
+        );
+        return runSearch({ allowAutoClassify: false, loadingBox });
+      }
+      if (Array.isArray(classifyData?.errors) && classifyData.errors.length) {
+        setGroupBoxStatus(
+          loadingBox,
+          `True visual classification finished with ${classifyData.errors.length} issue(s).`,
+          data.notice || "No saved results for this search yet."
+        );
+      }
+    }
+
+    loadingBox.remove();
+
     // Create a single per-search Saved box
-    const group = createGroupBox(`Saved: ${data.platform} • ${data.style} • ${niche}`, results);
+    let finalEmptyMessage = data.notice || "";
+    if (!results.length && !allowAutoClassify && ["single-clip", "multi-clip", "talking-head"].includes((style || "").trim().toLowerCase())) {
+      finalEmptyMessage = `True visual classification finished, but no ${style} results were found for '${niche}'.`;
+    }
+
+    const group = createGroupBox(
+      `Saved: ${data.platform} • ${data.style} • ${niche}`,
+      results,
+      undefined,
+      finalEmptyMessage
+    );
     canvasEl.appendChild(group);
 
   } catch (err) {
@@ -983,11 +1401,17 @@ function updateBoxResultsFromDOM(boxEl) {
   const items = Array.from(boxEl.querySelectorAll(".tile")).map((a) => {
     return {
       title: (a.dataset.title || "").trim(),
-      url: a.getAttribute("href") || "",
+      url: a.dataset.postUrl || "",
       platform: a.dataset.platform || "",
       tag: a.dataset.tag || "",
       description: a.dataset.description || "",
       thumbnail: a.dataset.thumbnail || "",
+      preview_url: a.dataset.previewUrl || a.dataset.thumbnail || "",
+      preview_mode: a.dataset.previewMode || "",
+      embed_url: a.dataset.embedUrl || "",
+      account_handle: a.dataset.accountHandle || "",
+      niche: a.dataset.niche || "",
+      id: a.dataset.postId || "",
     };
   });
 
@@ -1031,6 +1455,266 @@ function populateStylesForPlatform(platform) {
     o.value = opt.value;
     o.textContent = opt.label;
     styleSelect.appendChild(o);
+  }
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function renderAnalysisEmpty(message) {
+  analysisPanelBody.innerHTML = `
+    <div class="analysis-empty">${escapeHtml(message)}</div>
+  `;
+}
+
+function renderAnalysisFields(analysis) {
+  const orderedFields = [
+    ["hook_text", "Hook"],
+    ["hook_type", "Hook Type"],
+    ["content_angle", "Content Angle"],
+    ["creator_intent", "Creator Intent"],
+    ["cta_type", "CTA Type"],
+    ["voice_style", "Voice Style"],
+    ["structure_type", "Structure"],
+    ["pain_point", "Pain Point"],
+    ["audience_type", "Audience"],
+    ["rewriteable_takeaway", "Rewriteable Takeaway"],
+  ];
+
+  const fieldsHtml = [];
+
+  for (const [key, label] of orderedFields) {
+    const value = analysis?.[key];
+    if (!value) continue;
+
+    fieldsHtml.push(`
+      <div class="analysis-field">
+        <span class="analysis-label">${escapeHtml(label)}</span>
+        <div class="analysis-value">${escapeHtml(value)}</div>
+      </div>
+    `);
+  }
+
+  if (Array.isArray(analysis?.why_it_works) && analysis.why_it_works.length) {
+    fieldsHtml.push(`
+      <div class="analysis-field">
+        <span class="analysis-label">Why This Works</span>
+        <ul class="analysis-list">
+          ${analysis.why_it_works.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}
+        </ul>
+      </div>
+    `);
+  }
+
+  if (!fieldsHtml.length) {
+    fieldsHtml.push(`
+      <div class="analysis-empty">This post has an analysis record, but no analysis fields were filled yet.</div>
+    `);
+  }
+
+  return fieldsHtml.join("");
+}
+
+function renderAnalysisPanel(tile, analysis) {
+  const title = tile.dataset.title || "Untitled post";
+  const accountHandle = tile.dataset.accountHandle || "Unknown account";
+  const niche = tile.dataset.niche || "";
+  const thumbnail = tile.dataset.thumbnail || tile.dataset.previewUrl || "";
+  const rawPostUrl = (tile.dataset.postUrl || "").trim();
+  const postUrl = (() => {
+    try {
+      const u = new URL(rawPostUrl);
+      const match = u.pathname.match(/\/(p|reel|reels)\/([A-Za-z0-9_-]+)\/?/i);
+      if (!match) return rawPostUrl;
+      const kind = match[1].toLowerCase() === "reels" ? "reel" : match[1].toLowerCase();
+      return `https://www.instagram.com/${kind}/${match[2]}/`;
+    } catch (e) {
+      return rawPostUrl;
+    }
+  })();
+
+  const isInstagram = postUrl.includes("instagram.com");
+  const embedPreviewUrl = isInstagram
+    ? (() => {
+        try {
+          const base = tile.dataset.embedUrl || postUrl;
+          const u = new URL(base);
+          const match = u.pathname.match(/\/(p|reel|reels)\/([A-Za-z0-9_-]+)\/?/i);
+          if (!match) return postUrl.endsWith("/") ? `${postUrl}embed/` : `${postUrl}/embed/`;
+          const kind = match[1].toLowerCase() === "reels" ? "reel" : match[1].toLowerCase();
+          return `https://www.instagram.com/${kind}/${match[2]}/embed/`;
+        } catch (e) {
+          return postUrl.endsWith("/") ? `${postUrl}embed/` : `${postUrl}/embed/`;
+        }
+      })()
+    : (tile.dataset.embedUrl || "");
+
+  const previewHtml = thumbnail && !thumbnail.includes("/embed/")
+    ? `
+      <img
+        src="/api/proxy?url=${encodeURIComponent(thumbnail)}"
+        alt="${escapeHtml(title)}"
+        onerror="if(this.dataset.rawTried==='1'){${embedPreviewUrl ? `this.outerHTML='${`<iframe class=&quot;ig-embed&quot; src=&quot;${escapeHtml(embedPreviewUrl)}&quot; title=&quot;${escapeHtml(title)}&quot; loading=&quot;lazy&quot; scrolling=&quot;no&quot;></iframe>`}'.replace(/'/g, "&#39;")};` : `this.outerHTML='<div class=&quot;analysis-empty&quot; style=&quot;margin:0;border:0;border-radius:0;height:100%;display:flex;align-items:center;justify-content:center;&quot;>No preview available.</div>';`}return;} this.dataset.rawTried='1'; this.src='${escapeHtml(thumbnail).replace(/'/g, "&#39;")}'"
+      />
+    `
+    : (embedPreviewUrl
+        ? `<iframe class="ig-embed" src="${escapeHtml(embedPreviewUrl)}" title="${escapeHtml(title)}" loading="lazy" scrolling="no"></iframe>`
+        : `<div class="analysis-empty" style="margin: 0; border: 0; border-radius: 0; height: 100%; display: flex; align-items: center; justify-content: center;">No preview available.</div>`);
+
+  analysisPanelBody.innerHTML = `
+    <div class="analysis-card">
+      <div class="analysis-preview">${previewHtml}</div>
+      <div class="analysis-meta">
+        <h3 class="analysis-title">${escapeHtml(title)}</h3>
+        <div class="analysis-subtle">${escapeHtml(accountHandle)}${niche ? ` • ${escapeHtml(niche)}` : ""}</div>
+        ${postUrl ? `<a class="analysis-subtle" href="${escapeHtml(postUrl)}" target="_blank" rel="noreferrer">Open original post</a>` : ""}
+      </div>
+    </div>
+
+    <div class="analysis-grid">
+      ${renderAnalysisFields(analysis)}
+    </div>
+  `;
+}
+
+async function fetchStoredAnalysis(tile) {
+  const postId = (tile.dataset.postId || "").trim();
+  const postUrl = (tile.dataset.postUrl || "").trim();
+
+  const getAttempts = [];
+  const postAttempts = [];
+
+  if (postId) {
+    getAttempts.push(`/api/post_analysis/${encodeURIComponent(postId)}`);
+    getAttempts.push(`/api/post_analysis?post_id=${encodeURIComponent(postId)}`);
+    getAttempts.push(`/api/analyze/post?post_id=${encodeURIComponent(postId)}`);
+
+    postAttempts.push({
+      url: "/api/analyze/post",
+      body: { post_id: Number(postId) || postId },
+    });
+  }
+
+  if (postUrl) {
+    getAttempts.push(`/api/post_analysis?post_url=${encodeURIComponent(postUrl)}`);
+    getAttempts.push(`/api/analyze/post?post_url=${encodeURIComponent(postUrl)}`);
+
+    postAttempts.push({
+      url: "/api/analyze/post",
+      body: { post_url: postUrl },
+    });
+  }
+
+  console.log("[analysis] lookup start", {
+    postId,
+    postUrl,
+    getAttempts,
+    postAttempts,
+  });
+
+  for (const url of getAttempts) {
+    try {
+      const res = await fetch(url);
+      const text = await res.text();
+
+      console.log("[analysis] GET attempt", {
+        url,
+        status: res.status,
+        ok: res.ok,
+        bodyPreview: text.slice(0, 300),
+      });
+
+      if (!res.ok || !text) continue;
+
+      let data;
+      try {
+        data = JSON.parse(text);
+      } catch {
+        continue;
+      }
+
+      if (!data) continue;
+      if (data.analysis) return data.analysis;
+      if (data.post_analysis) return data.post_analysis;
+      if (data.result) return data.result;
+      if (data.hook_text || data.content_angle || data.creator_intent) return data;
+    } catch (err) {
+      console.warn("[analysis] GET attempt failed", url, err);
+    }
+  }
+
+  for (const attempt of postAttempts) {
+    try {
+      const res = await fetch(attempt.url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(attempt.body),
+      });
+
+      const text = await res.text();
+
+      console.log("[analysis] POST attempt", {
+        url: attempt.url,
+        requestBody: attempt.body,
+        status: res.status,
+        ok: res.ok,
+        bodyPreview: text.slice(0, 300),
+      });
+
+      if (!res.ok || !text) continue;
+
+      let data;
+      try {
+        data = JSON.parse(text);
+      } catch {
+        continue;
+      }
+
+      if (!data) continue;
+      if (data.analysis) return data.analysis;
+      if (data.post_analysis) return data.post_analysis;
+      if (data.result) return data.result;
+      if (data.hook_text || data.content_angle || data.creator_intent) return data;
+    } catch (err) {
+      console.warn("[analysis] POST attempt failed", attempt, err);
+    }
+  }
+
+  return null;
+}
+
+async function loadAnalysisForTile(tile) {
+  const debugMeta = {
+    title: tile.dataset.title || "",
+    postId: (tile.dataset.postId || "").trim(),
+    postUrl: (tile.dataset.postUrl || "").trim(),
+    accountHandle: tile.dataset.accountHandle || "",
+  };
+
+  console.log("[analysis] selected tile", debugMeta);
+  renderAnalysisEmpty("Loading analysis...");
+
+  try {
+    const analysis = await fetchStoredAnalysis(tile);
+
+    if (!analysis) {
+      renderAnalysisEmpty(
+        `No stored analysis exists for this post yet.\n\nPost ID: ${debugMeta.postId || "missing"}\nURL: ${debugMeta.postUrl || "missing"}`
+      );
+      return;
+    }
+
+    console.log("[analysis] loaded analysis", analysis);
+    renderAnalysisPanel(tile, analysis);
+  } catch (err) {
+    console.error("Failed to load post analysis:", err);
+    renderAnalysisEmpty("Failed to load analysis for this post.");
   }
 }
 
@@ -1090,8 +1774,7 @@ async function loadBoard() {
 
     // Empty state
     if (canvasEl.querySelectorAll(".group-box").length === 0) {
-      canvasEl.textContent =
-        "No saved board yet. Run a search, drag boxes around, then hit Save.";
+      canvasEl.innerHTML = "<div style=\"padding:24px;color:#666;font-size:14px;\">No saved board yet. Run a search, drag boxes around, then hit Save.</div>";
     }
   } catch (err) {
     console.error("Load failed:", err);
@@ -1107,13 +1790,19 @@ saveBtn.addEventListener("click", () => {
 });
 
 classifyBtn.addEventListener("click", async () => {
+  const originalLabel = classifyBtn.textContent;
   try {
+    classifyBtn.disabled = true;
+    classifyBtn.textContent = "Classifying…";
     const result = await classifyVisibleReels();
     console.log("Classify button result:", result);
-    alert("Frontend test classification finished. Check the console for details.");
+    alert(`True visual classification finished. Updated ${result?.updated || 0} reel(s).`);
   } catch (err) {
     console.error(err);
-    alert("Frontend test classification failed. Check console.");
+    alert("True visual classification failed. Check console.");
+  } finally {
+    classifyBtn.disabled = false;
+    classifyBtn.textContent = originalLabel;
   }
 });
 
@@ -1132,6 +1821,7 @@ const boardReady = loadBoard().finally(() => {
 // One click handler only
 searchBtn.addEventListener("click", async () => {
   await boardReady;
+  canvasEl.innerHTML = "";
   runSearch();
 });
 

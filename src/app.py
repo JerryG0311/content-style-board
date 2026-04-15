@@ -1,11 +1,11 @@
 from dotenv import load_dotenv
 import os
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 from json import JSONDecodeError
 
 import json
@@ -19,7 +19,6 @@ import subprocess
 
 
 from fastapi import Response
-from fastapi.responses import StreamingResponse
 from urllib.parse import unquote, quote
 from .jobs import (
     JOB_CLASSIFY_REEL_VIDEO,
@@ -32,6 +31,7 @@ from .jobs import (
 )
 from .search_service import get_niche_health
 from .expansion_service import expand_niche_if_needed
+from .discovery_service import discover_instagram_accounts_for_niche
 
 load_dotenv()
 
@@ -71,9 +71,30 @@ def brave_web_search(query: str, count: int = 8, safesearch: str = "moderate"):
     return r.json()
 
 
+def normalize_style_alias(style: str) -> str:
+    style = (style or "").lower().strip()
+
+    alias_map = {
+        "single-clip text reel": "single-clip",
+        "single clip text reel": "single-clip",
+        "single-clip reel": "single-clip",
+        "single clip reel": "single-clip",
+        "single clip": "single-clip",
+        "multi-clip reel": "multi-clip",
+        "multi clip reel": "multi-clip",
+        "multi clip": "multi-clip",
+        "talking head": "talking-head",
+        "talking-head reel": "talking-head",
+        "talking head reel": "talking-head",
+        "reels": "reel",
+        "posts": "post",
+    }
+
+    return alias_map.get(style, style)
+
 def build_query(platform: str, style: str, niche: str = "", seed: str = "") -> str:
     platform = (platform or "").lower().strip()
-    style = (style or "").lower().strip()
+    style = normalize_style_alias(style)
 
     niche = (niche or "").strip()
     seed = (seed or "").strip()
@@ -697,6 +718,28 @@ def init_db() -> None:
                 score REAL NOT NULL DEFAULT 0,
                 FOREIGN KEY(post_id) REFERENCES posts(id) ON DELETE CASCADE
             );
+
+            CREATE TABLE IF NOT EXISTS post_analysis (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                post_id INTEGER NOT NULL,
+                hook_text TEXT NOT NULL DEFAULT '',
+                hook_type TEXT NOT NULL DEFAULT '',
+                content_angle TEXT NOT NULL DEFAULT '',
+                creator_intent TEXT NOT NULL DEFAULT '',
+                cta_type TEXT NOT NULL DEFAULT '',
+                voice_style TEXT NOT NULL DEFAULT '',
+                structure_type TEXT NOT NULL DEFAULT '',
+                why_it_works TEXT NOT NULL DEFAULT '',
+                pain_point TEXT NOT NULL DEFAULT '',
+                audience_type TEXT NOT NULL DEFAULT '',
+                rewriteable_takeaway TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(post_id) REFERENCES posts(id) ON DELETE CASCADE
+            );
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_post_analysis_post_id
+            ON post_analysis(post_id);
             """
         )
 
@@ -736,6 +779,43 @@ def init_db() -> None:
                 "ALTER TABLE crawl_jobs ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0"
             )
 
+        # --- Begin schema migration for post_analysis columns ---
+        existing_analysis_cols = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(post_analysis)").fetchall()
+        }
+
+        if "hook_type" not in existing_analysis_cols:
+            conn.execute(
+                "ALTER TABLE post_analysis ADD COLUMN hook_type TEXT NOT NULL DEFAULT ''"
+            )
+        # --- End schema migration for post_analysis columns ---
+
+        conn.execute(
+            """
+            DELETE FROM posts
+            WHERE id NOT IN (
+                SELECT MAX(id)
+                FROM posts
+                GROUP BY post_url
+            )
+            """
+        )
+
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_posts_post_url
+            ON posts(post_url)
+            """
+        )
+
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_posts_platform_account_rank
+            ON posts(platform, account_handle, profile_rank, collected_at, id)
+            """
+        )
+
 
 def shortcode_from_url(url: str) -> str:
     u = (url or "").strip()
@@ -750,6 +830,31 @@ def shortcode_from_url(url: str) -> str:
         return m.group(2)
     return ""
 
+def canonicalize_instagram_post_url(post_url: str) -> str:
+    post_url = (post_url or "").strip()
+    if not post_url:
+        return ""
+
+    try:
+        parsed = urlparse(post_url)
+    except Exception:
+        return post_url
+
+    host = (parsed.netloc or "").lower()
+    if "instagram.com" not in host:
+        return post_url
+
+    path = parsed.path or ""
+    match = re.search(r"/(p|reel|reels)/([A-Za-z0-9_-]+)/?", path, flags=re.IGNORECASE)
+    if not match:
+        return post_url
+
+    kind = match.group(1).lower()
+    shortcode = match.group(2)
+    if kind == "reels":
+        kind = "reel"
+    return f"https://www.instagram.com/{kind}/{shortcode}/"
+
 
 def build_embed_url(platform: str, post_url: str) -> str:
     platform = (platform or "").lower().strip()
@@ -758,13 +863,14 @@ def build_embed_url(platform: str, post_url: str) -> str:
         return ""
 
     if platform == "instagram":
+        canonical_url = canonicalize_instagram_post_url(post_url)
         try:
-            u = urlparse(post_url)
+            u = urlparse(canonical_url or post_url)
             path = u.path or ""
             if not path.endswith("/"):
                 path += "/"
             if path.endswith("/embed/"):
-                return post_url
+                return canonical_url or post_url
             return f"https://www.instagram.com{path}embed/"
         except Exception:
             return ""
@@ -850,9 +956,72 @@ def upsert_post(
 
     with get_db() as conn:
         existing = conn.execute(
-            "SELECT id FROM posts WHERE post_url = ?",
+            "SELECT * FROM posts WHERE post_url = ? ORDER BY id DESC LIMIT 1",
             (post_url,),
         ).fetchone()
+
+        if existing:
+            existing_id = existing["id"]
+            keep_classified_post_type = classified_post_type or (existing["classified_post_type"] or "")
+            keep_classifier_confidence = (
+                float(classifier_confidence or 0)
+                if classified_post_type
+                else float(existing["classifier_confidence"] or 0)
+            )
+            keep_classifier_version = (
+                classifier_version
+                if classified_post_type
+                else (existing["classifier_version"] or "")
+            )
+            keep_classified_at = classified_at if classified_post_type else (existing["classified_at"] or "")
+
+            conn.execute(
+                """
+                UPDATE posts
+                SET
+                    platform = ?,
+                    account_handle = ?,
+                    post_url = ?,
+                    shortcode = ?,
+                    post_type = ?,
+                    classified_post_type = ?,
+                    classifier_confidence = ?,
+                    classifier_version = ?,
+                    classified_at = ?,
+                    caption = ?,
+                    preview_mode = ?,
+                    preview_url = ?,
+                    embed_url = ?,
+                    niche = ?,
+                    profile_rank = ?,
+                    collected_at = ?
+                WHERE id = ?
+                """,
+                (
+                    platform,
+                    account_handle,
+                    post_url,
+                    shortcode,
+                    tag,
+                    keep_classified_post_type,
+                    keep_classifier_confidence,
+                    keep_classifier_version,
+                    keep_classified_at,
+                    caption,
+                    preview_mode,
+                    preview_url,
+                    embed_url,
+                    niche,
+                    profile_rank,
+                    now,
+                    existing_id,
+                ),
+            )
+            row = conn.execute("SELECT * FROM posts WHERE id = ?", (existing_id,)).fetchone()
+            out = dict(row) if row else {}
+            if out:
+                out["_was_inserted"] = False
+            return out
 
         conn.execute(
             """
@@ -862,34 +1031,6 @@ def upsert_post(
                 caption, preview_mode, preview_url, embed_url, niche, profile_rank,
                 collected_at, created_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(post_url) DO UPDATE SET
-                platform = excluded.platform,
-                account_handle = excluded.account_handle,
-                shortcode = excluded.shortcode,
-                post_type = excluded.post_type,
-                classified_post_type = CASE
-                    WHEN excluded.classified_post_type <> '' THEN excluded.classified_post_type
-                    ELSE posts.classified_post_type
-                END,
-                classifier_confidence = CASE
-                    WHEN excluded.classified_post_type <> '' THEN excluded.classifier_confidence
-                    ELSE posts.classifier_confidence
-                END,
-                classifier_version = CASE
-                    WHEN excluded.classified_post_type <> '' THEN excluded.classifier_version
-                    ELSE posts.classifier_version
-                END,
-                classified_at = CASE
-                    WHEN excluded.classified_post_type <> '' THEN excluded.classified_at
-                    ELSE posts.classified_at
-                END,
-                caption = excluded.caption,
-                preview_mode = excluded.preview_mode,
-                preview_url = excluded.preview_url,
-                embed_url = excluded.embed_url,
-                niche = excluded.niche,
-                profile_rank = excluded.profile_rank,
-                collected_at = excluded.collected_at
             """,
             (
                 platform,
@@ -911,11 +1052,14 @@ def upsert_post(
                 now,
             ),
         )
-        row = conn.execute("SELECT * FROM posts WHERE post_url = ?", (post_url,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM posts WHERE post_url = ? ORDER BY id DESC LIMIT 1",
+            (post_url,),
+        ).fetchone()
 
     out = dict(row) if row else {}
     if out:
-        out["_was_inserted"] = existing is None
+        out["_was_inserted"] = True
     return out
 
 def post_exists(post_url: str) -> bool:
@@ -943,6 +1087,76 @@ def update_post_profile_rank(post_url: str, profile_rank: int) -> None:
             (profile_rank, post_url),
         )
 
+def reset_profile_ranks_for_account(platform: str, handle: str, default_rank: int = 999999) -> None:
+    platform = (platform or "").lower().strip()
+    handle = (handle or "").strip().lstrip("@")
+    default_rank = int(default_rank if default_rank is not None else 999999)
+    if not platform or not handle:
+        return
+    
+    with get_db() as conn:
+        conn.execute(
+            """
+            UPDATE posts
+            SET profile_rank = ?
+            WHERE platform = ? AND account_handle = ?
+            """,
+            (default_rank, platform, handle)
+        )
+
+def backfill_profile_ranks_for_unseen_posts(
+        platform: str, 
+        handle: str,
+        seen_posts_urls: list[str],
+        start_rank: int,
+) -> None:
+    platform = (platform or "").lower().strip()
+    handle = (handle or "").strip().lstrip("@")
+    start_rank = int(start_rank if start_rank is not None else 0)
+    
+    if not platform or not handle:
+        return 
+    
+    normalized_seen = []
+    seen_set = set()
+    for url in seen_posts_urls or []:
+        u = (url or "").strip()
+        if not u or u in seen_set:
+            continue
+        seen_set.add(u)
+        normalized_seen.append(u)
+    
+    with get_db() as conn:
+        if normalized_seen:
+            placeholders = ",".join(["?"] * len(normalized_seen))
+            rows = conn.execute(
+                f"""
+                SELECT id
+                FROM posts 
+                WHERE platform = ?
+                    AND account_handle = ?
+                    AND post_url NOT IN ({placeholders})
+                ORDER BY profile_rank ASC, collected_at DESC, id DESC
+                """,
+                [platform, handle, *normalized_seen],
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT id
+                FROM posts
+                WHERE platform = ?
+                    AND account_handle = ?
+                ORDER BY profile_rank ASC, collected_at DESC, id DESC
+                """,
+                (platform, handle),
+            ).fetchall()
+        
+        for offset, row in enumerate(rows):
+            conn.execute(
+                "UPDATE posts SET profile_rank = ? WHERE id = ?",
+                (start_rank + offset, row[0]),
+            )
 
 # --- Begin metadata backfill helpers for Instagram posts ---
 def get_post_by_url(post_url: str) -> dict:
@@ -990,10 +1204,22 @@ def existing_post_needs_metadata_refresh(row: dict) -> bool:
     # are worse. Only re-fetch when the stored text metadata itself is clearly weak.
     return False
 
+def search_account_cap_for_style(style: str) -> int:
+    style = normalize_style_alias(style)
+    if style == "carousel":
+        return 2
+    if style in ("single-clip", "multi-clip", "talking-head"):
+        return 3
+    if style == "reel":
+        return 3
+    return 4
+
+
 def search_posts_index(platform: str, style: str, niche: str = "", limit: int = 24) -> list:
     platform = (platform or "").lower().strip()
-    style = (style or "").lower().strip()
+    style = normalize_style_alias(style)
     niche = (niche or "").strip().lower()
+    is_reel_substyle = style in ("single-clip", "multi-clip", "talking-head")
 
     where = ["platform = ?"]
     params = [platform]
@@ -1002,9 +1228,11 @@ def search_posts_index(platform: str, style: str, niche: str = "", limit: int = 
         if style == "carousel":
             where.append("post_type = ?")
             params.append("carousel")
-        elif style in ("single-clip", "multi-clip", "talking-head"):
+        elif is_reel_substyle:
             where.append("classified_post_type = ?")
             params.append(style)
+            where.append("classifier_version LIKE ?")
+            params.append("%openai_frames_v1%")
         elif style == "reel":
             where.append("post_type = ?")
             params.append("reel")
@@ -1017,27 +1245,99 @@ def search_posts_index(platform: str, style: str, niche: str = "", limit: int = 
         like = f"%{niche}%"
         params.extend([like, like, like])
 
+    order_by_parts = []
+
+    # 1) Strongest niche/account relevance first.
+    # Penalize generic brand accounts like @amazon so creator accounts surface first.
+    if niche:
+        exact_niche = niche.lower()
+        niche_like = f"%{exact_niche}%"
+        order_by_parts.append(
+            "CASE "
+            "WHEN LOWER(niche) = ? AND LOWER(account_handle) NOT IN ('amazon') THEN 0 "
+            "WHEN LOWER(account_handle) LIKE ? AND LOWER(account_handle) NOT IN ('amazon') THEN 1 "
+            "WHEN LOWER(caption) LIKE ? AND LOWER(account_handle) NOT IN ('amazon') THEN 2 "
+            "WHEN LOWER(niche) LIKE ? AND LOWER(account_handle) NOT IN ('amazon') THEN 3 "
+            "WHEN LOWER(account_handle) IN ('amazon') THEN 10 "
+            "ELSE 5 END ASC"
+        )
+        params.extend([exact_niche, niche_like, niche_like, niche_like])
+
+    # 2) Then recency
+    order_by_parts.append("collected_at DESC")
+
+    # 3) Then profile rank
+    order_by_parts.append("profile_rank ASC")
+
+    # 4) Then style preference
+    if is_reel_substyle:
+        order_by_parts.append(
+            "CASE "
+            "WHEN classified_post_type = ? THEN 0 "
+            "WHEN classified_post_type IN ('single-clip', 'multi-clip', 'talking-head') THEN 1 "
+            "ELSE 2 END ASC"
+        )
+        params.append(style)
+    elif style == "reel":
+        order_by_parts.append(
+            "CASE WHEN post_type = 'reel' THEN 0 ELSE 1 END ASC"
+        )
+    elif style == "carousel":
+        order_by_parts.append(
+            "CASE WHEN post_type = 'carousel' THEN 0 ELSE 1 END ASC"
+        )
+
+    # 5) Stable tiebreaker
+    order_by_parts.append("id DESC")
+
+
     sql = f"""
         SELECT *
-        FROM posts
+        FROM posts 
         WHERE {' AND '.join(where)}
-        ORDER BY profile_rank ASC, collected_at DESC, id DESC
+        ORDER BY {', '.join(order_by_parts)}
         LIMIT ?
     """
-    params.append(limit)
+    params.append(max(limit * 10, 60) if niche else limit)
 
     with get_db() as conn:
         rows = conn.execute(sql, params).fetchall()
 
     out = []
+    account_counts: dict[str, int] = {}
+    per_account_cap = search_account_cap_for_style(style)
+
     for r in rows:
         row = dict(r)
+        niche_score = 1.0
+        if niche:
+            caption_text = row.get("caption") or ""
+            account_text = row.get("account_handle") or ""
+            assigned_niche = row.get("niche") or ""
+            caption_score = score_niche_relevance(niche, caption_text)
+            account_score = score_niche_relevance(niche, account_text)
+            assigned_score = score_niche_relevance(niche, assigned_niche)
+            niche_score = max(
+                caption_score,
+                min(0.55, account_score * 0.8 + assigned_score * 0.3),
+                assigned_score * 0.7,
+            )
+            minimum_score = 0.35 if len(tokenize(niche)) >= 2 else 0.25
+            if niche_score < minimum_score:
+                continue
+
+        account_handle = (row.get("account_handle") or "").strip().lower()
+        if account_handle:
+            current_count = account_counts.get(account_handle, 0)
+            if current_count >= per_account_cap:
+                continue    
+
         out.append(
             {
                 "title": (row.get("caption") or row.get("post_url") or "").splitlines()[0][:140],
                 "url": row.get("post_url") or "",
                 "platform": row.get("platform") or platform,
-                "tag": row.get("classified_post_type") or style,
+                "tag": row.get("classified_post_type") or row.get("post_type") or style,
                 "raw_post_type": row.get("post_type") or "",
                 "classified_post_type": row.get("classified_post_type") or "",
                 "classifier_confidence": row.get("classifier_confidence") or 0,
@@ -1047,14 +1347,157 @@ def search_posts_index(platform: str, style: str, niche: str = "", limit: int = 
                 "embed_url": row.get("embed_url") or "",
                 "account_handle": row.get("account_handle") or "",
                 "niche": row.get("niche") or "",
+                "niche_score": niche_score,
                 "source": "local_index",
             }
         )
+        if account_handle:
+            account_counts[account_handle] = account_counts.get(account_handle, 0) + 1
+        if len(out) >= limit:
+            break
     return out
 
+def get_post_analysis(post_id: int) -> dict:
+    post_id = int(post_id or 0)
+    if post_id <= 0:
+        return {}
 
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM post_analysis WHERE post_id = ? LIMIT 1",
+            (post_id,),
+        ).fetchone()
 
+    if not row:
+        return {}
 
+    out = dict(row)
+    try:
+        out["why_it_works"] = json.loads(out.get("why_it_works") or "[]")
+    except Exception:
+        out["why_it_works"] = []
+    return out
+
+def upsert_post_analysis(
+        post_id: int,
+        hook_text: str = "",
+        hook_type: str = "",
+        content_angle: str = "",
+        creator_intent: str = "",
+        cta_type: str = "",
+        voice_style: str = "",
+        structure_type: str = "",
+        why_it_works: list[str] | None = None,
+        pain_point: str = "",
+        audience_type: str = "",
+        rewriteable_takeaway: str = "",
+) -> dict:
+    post_id = int(post_id or 0)
+    if post_id <= 0:
+        raise ValueError("post_id is required")
+    
+    hook_text = (hook_text or "").strip()
+    hook_type = (hook_type or "").strip()
+    content_angle = (content_angle or "").strip()
+    creator_intent = (creator_intent or "").strip()
+    cta_type = (cta_type or "").strip()
+    voice_style = (voice_style or "").strip()
+    structure_type = (structure_type or "").strip()
+    pain_point = (pain_point or "").strip()
+    audience_type = (audience_type or "").strip()
+    rewriteable_takeaway = (rewriteable_takeaway or "").strip()
+    if not isinstance(why_it_works, list):
+        why_it_works = []
+    why_it_works_json = json.dumps(why_it_works)
+    now = utc_now_iso()
+
+    with get_db() as conn:
+        post_row = conn.execute(
+            "SELECT id FROM posts WHERE id = ? LIMIT 1",
+            (post_id,),
+        ).fetchone()
+        if not post_row:
+            raise ValueError("post not found")
+
+        existing = conn.execute(
+            "SELECT id FROM post_analysis WHERE post_id = ? LIMIT 1",
+            (post_id,),
+        ).fetchone()
+
+        if existing:
+            conn.execute(
+                """
+                UPDATE post_analysis
+                SET
+                    hook_text = ?,
+                    hook_type = ?,
+                    content_angle = ?,
+                    creator_intent = ?,
+                    cta_type = ?,
+                    voice_style = ?,
+                    structure_type = ?,
+                    why_it_works = ?,
+                    pain_point = ?,
+                    audience_type = ?,
+                    rewriteable_takeaway = ?,
+                    updated_at = ?
+                WHERE post_id = ?
+                """,
+                (
+                    hook_text,
+                    hook_type,
+                    content_angle,
+                    creator_intent,
+                    cta_type,
+                    voice_style,
+                    structure_type,
+                    why_it_works_json,
+                    pain_point,
+                    audience_type,
+                    rewriteable_takeaway,
+                    now,
+                    post_id,
+                ),
+            )
+        else:
+            conn.execute(
+                """
+                INSERT INTO post_analysis (
+                    post_id,
+                    hook_text,
+                    hook_type,
+                    content_angle,
+                    creator_intent,
+                    cta_type,
+                    voice_style,
+                    structure_type,
+                    why_it_works,
+                    pain_point,
+                    audience_type,
+                    rewriteable_takeaway,
+                    created_at,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    post_id,
+                    hook_text,
+                    hook_type,
+                    content_angle,
+                    creator_intent,
+                    cta_type,
+                    voice_style,
+                    structure_type,
+                    why_it_works_json,
+                    pain_point,
+                    audience_type,
+                    rewriteable_takeaway,
+                    now,
+                    now,
+                ),
+            )
+    return get_post_analysis(post_id)
+        
 
 # --- Instagram seed account collector ---
 
@@ -1604,6 +2047,8 @@ def collect_instagram_seed_account(handle: str, niche: str = "", max_posts: int 
 
     # 1. Primary: extract post/reel URLs from the public profile HTML.
     urls = fetch_instagram_profile_post_urls(handle, max_posts=fetch_window)
+    
+    urls = urls[:fetch_window]
 
     # 2. Secondary: try the authenticated profile API if HTML yields nothing.
     if not urls:
@@ -1620,8 +2065,10 @@ def collect_instagram_seed_account(handle: str, niche: str = "", max_posts: int 
         urls = fetch_instagram_posts_via_ytdlp(handle, max_posts=fetch_window)
 
     created = []
+    seen_post_urls = []
 
     for rank, post_url in enumerate(urls):
+        seen_post_urls.append(post_url)
         if post_exists(post_url):
             update_post_profile_rank(post_url, rank)
 
@@ -1723,12 +2170,93 @@ def collect_instagram_seed_account(handle: str, niche: str = "", max_posts: int 
             created.append(row)
             if len(created) >= max_posts:
                 break
-
+    
+    backfill_profile_ranks_for_unseen_posts(
+        "instagram",
+        handle,
+        seen_post_urls,
+        start_rank=len(seen_post_urls)
+    )            
     mark_seed_account_crawled("instagram", handle)
     prune_posts_for_account("instagram", handle, keep_posts=keep_posts)
     return created
 
-class BoardPlayload(BaseModel):
+def bootstrap_niche_posts_sync(
+    platform: str,
+    style: str,
+    niche: str,
+    discovery_limit: int = 8,
+    crawl_accounts: int = 5,
+    posts_per_account: int = 24,
+) -> dict:
+    """
+    Synchronously expand a thin niche before search returns.
+
+    This is intentionally more aggressive than the async expansion flow because
+    the search UX depends on having enough candidate reels to classify.
+    """
+    platform = (platform or "").lower().strip()
+    style = normalize_style_alias(style)
+    niche = (niche or "").strip()
+    discovery_limit = max(1, int(discovery_limit or 8))
+    crawl_accounts = max(1, int(crawl_accounts or 5))
+    posts_per_account = max(8, int(posts_per_account or 24))
+
+    if platform != "instagram" or not niche:
+        return {
+            "ok": False,
+            "platform": platform,
+            "style": style,
+            "niche": niche,
+            "reason": "unsupported_or_missing_niche",
+            "discovered_accounts": [],
+            "crawled_handles": [],
+            "created_posts": 0,
+            "errors": [],
+        }
+
+    discovered_accounts = discover_instagram_accounts_for_niche(
+        niche=niche,
+        limit=discovery_limit,
+    )
+    crawled_handles = []
+    errors = []
+    created_posts = 0
+
+    for account in discovered_accounts[:crawl_accounts]:
+        handle = (account.get("handle") or "").strip().lstrip("@")
+        if not handle:
+            continue
+        try:
+            create_seed_account(platform="instagram", handle=handle, niche=niche)
+            rows = collect_instagram_seed_account(
+                handle=handle,
+                niche=niche,
+                max_posts=posts_per_account,
+                keep_posts=posts_per_account,
+            )
+            crawled_handles.append(handle)
+            created_posts += len(rows or [])
+        except Exception as e:
+            errors.append(
+                {
+                    "handle": handle,
+                    "error": str(e),
+                }
+            )
+
+    return {
+        "ok": True,
+        "platform": platform,
+        "style": style,
+        "niche": niche,
+        "discovered_accounts": discovered_accounts,
+        "crawled_handles": crawled_handles,
+        "created_posts": created_posts,
+        "errors": errors,
+    }
+
+class BoardPayload(BaseModel):
     board: list
 
 
@@ -1752,8 +2280,38 @@ class PostPayload(BaseModel):
     classifier_confidence: float = 0.0
     classifier_version: str = ""
 
+class PostAnalysisPayload(BaseModel):
+    post_id: int | None = None
+    post_url: str | None = None
+    hook_text: str = ""
+    hook_type: str = ""
+    content_angle: str = ""
+    creator_intent: str = ""
+    cta_type: str = ""
+    voice_style: str = ""
+    structure_type: str = ""
+    why_it_works: list[str] = []
+    pain_point: str = ""
+    audience_type: str = ""
+    rewriteable_takeaway: str = ""
+
+    @model_validator(mode="after")
+    def validate_post_reference(self):
+        if self.post_id is None and not self.post_url:
+            raise ValueError("post_id or post_url is required")
+        return self
+
+class BootstrapNichePayload(BaseModel):
+    platform: str = "instagram"
+    style: str = "reel"
+    niche: str
+    discovery_limit: int = 12
+    crawl_accounts: int = 8
+    posts_per_account: int = 24
+
+
 @app.post("/api/board/save")
-def save_board(payload: BoardPlayload):
+def save_board(payload: BoardPayload):
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     BOARD_FILE.write_text(json.dumps(payload.board, indent=2), encoding="utf-8")
     return {"ok": True, "saved": len(payload.board)}
@@ -1792,6 +2350,29 @@ def api_list_seed_accounts():
     return {"ok": True, "seed_accounts": list_seed_accounts()}
 
 
+@app.post("/api/niche/bootstrap")
+def api_bootstrap_niche(payload: BootstrapNichePayload):
+    platform = (payload.platform or "instagram").lower().strip()
+    style = normalize_style_alias(payload.style)
+    niche = (payload.niche or "").strip()
+
+    if not niche:
+        return JSONResponse({"ok": False, "error": "niche is required"}, status_code=400)
+    
+    try:
+        result = bootstrap_niche_posts_sync(
+            platform = platform,
+            style = style, 
+            niche = niche,
+            discovery_limit = payload.discovery_limit,
+            crawl_accounts = payload.crawl_accounts,
+            posts_per_account = payload.posts_per_account,
+        )
+        return {"ok": True, "bootstrap": result}
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
 @app.post("/api/posts")
 def api_upsert_post(payload: PostPayload):
     try:
@@ -1811,7 +2392,133 @@ def api_upsert_post(payload: PostPayload):
         return {"ok": True, "post": row}
     except ValueError as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+
+@app.get("/api/post_analysis/{post_id}")
+def api_get_post_analysis(post_id: int):
+    analysis = get_post_analysis(post_id)
+    return {"ok": True, "analysis": analysis}
+
+@app.post("/api/post_analysis")
+def api_upsert_post_analysis(payload: PostAnalysisPayload):
+    resolved_post_id = payload.post_id
+
+    if resolved_post_id is None and payload.post_url:
+        lookup_url = (payload.post_url or "").strip()
+        lookup_shortcode = shortcode_from_url(lookup_url)
+
+        with get_db() as conn:
+            post_row = conn.execute(
+                """
+                SELECT id
+                FROM posts
+                WHERE post_url = ?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (lookup_url,),
+            ).fetchone()
+
+            if not post_row and lookup_shortcode:
+                post_row = conn.execute(
+                    """
+                    SELECT id
+                    FROM posts
+                    WHERE shortcode = ?
+                    ORDER BY id DESC
+                    LIMIT 1
+                    """,
+                    (lookup_shortcode,),
+                ).fetchone()
+
+        if not post_row:
+            raise HTTPException(status_code=404, detail="Post not found for provided post_url")
+
+        resolved_post_id = post_row["id"]
     
+    row = upsert_post_analysis(
+        post_id=resolved_post_id,
+        hook_text=payload.hook_text,
+        hook_type=payload.hook_type,
+        content_angle=payload.content_angle,
+        creator_intent=payload.creator_intent,
+        cta_type=payload.cta_type,
+        voice_style=payload.voice_style,
+        structure_type=payload.structure_type,
+        why_it_works=payload.why_it_works,
+        pain_point=payload.pain_point,
+        audience_type=payload.audience_type,
+        rewriteable_takeaway=payload.rewriteable_takeaway,
+    )
+
+    return {"ok": True, "analysis": serialize_post_analysis_row(row)}
+
+def serialize_post_analysis_row(row):
+    if not row:
+        return None
+    
+    data = dict(row)
+    why_it_works = data.get("why_it_works")
+
+    if isinstance(why_it_works, str) and why_it_works:
+        try:
+            data["why_it_works"] = json.loads(why_it_works)
+        except Exception:
+            data["why_it_works"] = [why_it_works]
+    elif why_it_works in (None, ""):
+        data["why_it_works"] = []
+    
+    return data
+
+@app.get("/api/post_analysis")
+def api_get_post_analysis(post_id: int | None = None, post_url: str | None = None):
+    if post_id is None and not post_url:
+        return {"ok": False, "analysis": None, "error": "post_id or post_url is required"}
+    
+    with get_db() as conn:
+        row = None
+
+        if post_id is not None:
+            row = conn.execute(
+                """
+                SELECT pa.*
+                FROM post_analysis pa
+                WHERE pa.post_id = ?
+                ORDER BY pa.updated_at DESC, pa.id DESC
+                LIMIT 1
+                """,
+                (post_id,),
+            ).fetchone()
+        
+        if row is None and post_url:
+            lookup_url = (post_url or "").strip()
+            lookup_shortcode = shortcode_from_url(lookup_url)
+
+            row = conn.execute(
+                """
+                SELECT pa.*
+                FROM post_analysis pa
+                JOIN posts p ON p.id = pa.post_id
+                WHERE p.post_url = ?
+                ORDER BY pa.updated_at DESC, pa.id DESC
+                LIMIT 1
+                """,
+                (lookup_url,),
+            ).fetchone()
+
+            if row is None and lookup_shortcode:
+                row = conn.execute(
+                    """
+                    SELECT pa.*
+                    FROM post_analysis pa
+                    JOIN posts p ON p.id = pa.post_id
+                    WHERE p.shortcode = ?
+                    ORDER BY pa.updated_at DESC, pa.id DESC
+                    LIMIT 1
+                    """,
+                    (lookup_shortcode,),
+                ).fetchone()
+    
+    return {"ok": True, "analysis": serialize_post_analysis_row(row)}
 
 @app.get("/api/debug/instagram_profile")
 def api_debug_instagram_profile(handle: str = ""):
@@ -1848,7 +2555,10 @@ def classify_reel_row(row: sqlite3.Row) -> tuple[str, float, str]:
     )
 
     style = (analysis.get("style") or "").strip().lower()
-    confidence = float(analysis.get("confidence") or 0)
+    try:
+        confidence = float(analysis.get("confidence") or 0.0)
+    except (TypeError, ValueError):
+        confidence = 0.0
 
     if style in ("single-clip", "multi-clip", "talking-head"):
         return (style, confidence, "heuristic_text_v1")
@@ -1935,6 +2645,199 @@ def api_classify_reels(limit: int = 10, fps: float = 1.0):
         "job_type": JOB_CLASSIFY_REEL_VIDEO,
         "mode": "async",
         "note": "Jobs were enqueued to RabbitMQ. A worker process must consume and execute them.",
+    }
+
+@app.post("/api/classify/reels/heuristic")
+def api_classify_reels_heuristic(
+    platform: str = "instagram",
+    niche: str = "",
+    limit: int = 24,
+):
+    """
+    Lightweight synchronous reel classifier for the current local DB.
+    Uses saved URL/caption metadata only, so it can run instantly from the UI
+    when a subtype search has no classified matches yet.
+    """
+    platform = (platform or "instagram").lower().strip()
+    niche = (niche or "").strip().lower()
+    limit = max(1, int(limit or 24))
+
+    where = [
+        "platform = ?",
+        "post_type = 'reel'",
+        "(classified_post_type = '' OR classified_post_type IS NULL)",
+    ]
+    params = [platform]
+
+    if niche:
+        like = f"%{niche}%"
+        where.append("(LOWER(niche) LIKE ? OR LOWER(caption) LIKE ? OR LOWER(account_handle) LIKE ?)")
+        params.extend([like, like, like])
+
+    sql = f"""
+        SELECT *
+        FROM posts
+        WHERE {' AND '.join(where)}
+        ORDER BY collected_at DESC, profile_rank ASC, id DESC
+        LIMIT ?
+    """
+    params.append(limit)
+
+    updated = []
+    inspected = 0
+
+    with get_db() as conn:
+        rows = conn.execute(sql, params).fetchall()
+
+    for row in rows:
+        inspected += 1
+        classified_post_type, classifier_confidence, classifier_version = classify_reel_row(row)
+        if classified_post_type not in ("single-clip", "multi-clip", "talking-head"):
+            continue
+        if classifier_confidence < 0.60:
+            continue
+
+        updated_row = update_post_classification_by_url(
+            post_url=row["post_url"] or "",
+            classified_post_type=classified_post_type,
+            classifier_confidence=classifier_confidence,
+            classifier_version=classifier_version,
+        )
+        updated.append(
+            {
+                "post_url": updated_row.get("post_url") or row["post_url"] or "",
+                "classified_post_type": classified_post_type,
+                "classifier_confidence": classifier_confidence,
+            }
+        )
+
+    return {
+        "ok": True,
+        "mode": "heuristic_sync",
+        "platform": platform,
+        "niche": niche,
+        "inspected": inspected,
+        "updated": len(updated),
+        "results": updated,
+    }
+
+@app.post("/api/classify/reels/true_visual")
+def api_classify_reels_true_visual(
+    platform: str = "instagram",
+    niche: str = "",
+    style: str = "",
+    limit: int = 6,
+    fps: float = 1.0,
+):
+    """
+    Synchronous true visual classifier for local Instagram reels.
+
+    This is the production-grade path for subtype accuracy:
+    1. download the real reel video
+    2. extract sampled frames
+    3. run AI vision over those frames
+    4. write the classification back to SQLite immediately
+
+    It is slower than heuristic mode, but materially more accurate.
+    """
+    platform = (platform or "instagram").lower().strip()
+    niche = (niche or "").strip().lower()
+    style = normalize_style_alias(style)
+    limit = max(1, min(int(limit or 6), 24))
+    fps = float(fps or 1.0)
+
+    where = [
+        "platform = ?",
+        "post_type = 'reel'",
+        "("
+        "classified_post_type = '' "
+        "OR classified_post_type IS NULL "
+        "OR classifier_version = '' "
+        "OR classifier_version IS NULL "
+        "OR classifier_version NOT LIKE '%openai_frames_v1%'"
+        ")",
+    ]
+    params = [platform]
+
+    if niche:
+        like = f"%{niche}%"
+        where.append("(LOWER(niche) LIKE ? OR LOWER(caption) LIKE ? OR LOWER(account_handle) LIKE ?)")
+        params.extend([like, like, like])
+
+    sql = f"""
+        SELECT *
+        FROM posts
+        WHERE {' AND '.join(where)}
+        ORDER BY collected_at DESC, profile_rank ASC, id DESC
+        LIMIT ?
+    """
+    params.append(limit)
+
+    with get_db() as conn:
+        rows = conn.execute(sql, params).fetchall()
+
+    updated = []
+    errors = []
+
+    for row in rows:
+        post_url = (row["post_url"] or "").strip()
+        if not post_url:
+            continue
+
+        try:
+            video_path = download_instagram_reel_video(post_url)
+            frame_paths = extract_frames_from_video(video_path, fps=fps)
+            frame_analysis = analyze_frames_with_ai(frame_paths)
+            classified_post_type, classifier_confidence, classifier_version = classify_reel_from_visual_signals(
+                text_density=frame_analysis.get("text_density", 0.0),
+                scene_change_score=frame_analysis.get("scene_change_score", 0.0),
+                face_ratio=frame_analysis.get("face_ratio", 0.0),
+                has_large_face=frame_analysis.get("has_large_face", False),
+                sampled_frames=len(frame_paths),
+            )
+
+            if not classified_post_type:
+                errors.append(
+                    {
+                        "post_url": post_url,
+                        "error": "visual_classifier_no_label",
+                    }
+                )
+                continue
+
+            updated_row = update_post_classification_by_url(
+                post_url=post_url,
+                classified_post_type=classified_post_type,
+                classifier_confidence=classifier_confidence,
+                classifier_version=f"{classifier_version}:openai_frames_v1",
+            )
+            updated.append(
+                {
+                    "post_url": updated_row.get("post_url") or post_url,
+                    "classified_post_type": classified_post_type,
+                    "classifier_confidence": classifier_confidence,
+                    "classifier_version": f"{classifier_version}:openai_frames_v1",
+                    "sampled_frames": len(frame_paths),
+                }
+            )
+        except Exception as e:
+            errors.append(
+                {
+                    "post_url": post_url,
+                    "error": str(e),
+                }
+            )
+
+    return {
+        "ok": True,
+        "mode": "true_visual_sync",
+        "platform": platform,
+        "niche": niche,
+        "style": style,
+        "attempted": len(rows),
+        "updated": len(updated),
+        "results": updated,
+        "errors": errors,
     }
 
 
@@ -2033,7 +2936,6 @@ def api_list_stale_jobs(stale_after_minutes: int = 15, limit: int = 50):
             FROM crawl_jobs
             WHERE status = 'processing'
               AND started_at <> ''
-              AND started_at IS NOT NULL
               AND started_at < ?
             ORDER BY started_at ASC, id ASC
             LIMIT ?
@@ -2440,7 +3342,7 @@ def crawl_seed_accounts(crawl_cooldown_minutes: int = 60):
             })
             continue
 
-        rows = collect_instagram_seed_account(handle=handle, niche=niche, max_posts=12, keep_posts=24)
+        rows = collect_instagram_seed_account(handle=handle, niche=niche, max_posts=24, keep_posts=24)
         created.extend(rows)
         summary.append({
             "platform": platform,
@@ -2490,14 +3392,101 @@ def search(
 ):
     platform = (platform or "instagram").lower().strip()
     style = (style or "carousel").lower().strip()
-    indexed_results = search_posts_index(platform=platform, style=style, niche=niche, limit=24)
+    normalized_style = normalize_style_alias(style)
+    min_result_target = 10 if normalized_style in ("single-clip", "multi-clip", "talking-head", "carousel") else 8
+    indexed_results = search_posts_index(platform=platform, style=style, niche=niche, limit=max(24, min_result_target * 2))
+    subtype_notice = ""
+    bootstrap_summary = []
+    classification_summary = []
+
+    if not indexed_results and normalized_style in ("single-clip", "multi-clip", "talking-head"):
+        fallback_reels = search_posts_index(platform=platform, style="reel", niche=niche, limit=24)
+        if fallback_reels:
+            subtype_notice = (
+                f"No {normalized_style} results are classified yet for '{niche}'. "
+                f"We do have {len(fallback_reels)} raw reel candidate(s), but they are not labeled confidently enough to show under this subtype."
+            )
+    print(
+        "DEBUG /api/search",
+        {
+            "platform": platform,
+            "style": style,
+            "niche": niche,
+            "count": len(indexed_results),
+            "top_urls": [r.get("url") for r in indexed_results[:5]],
+            "notice": subtype_notice,
+        }
+    )
     niche_health = get_niche_health(platform=platform, style=style, niche=niche)
+    should_bootstrap = (
+        platform == "instagram"
+        and bool((niche or "").strip())
+        and (
+            len(indexed_results) < min_result_target
+            or not niche_health.get("healthy")
+            or int(niche_health.get("distinct_accounts") or 0) < 8
+        )
+    )
+    if should_bootstrap:
+        for attempt in range(3):
+            if len(indexed_results) >= min_result_target:
+                break
+
+            bootstrap_result = bootstrap_niche_posts_sync(
+                platform=platform,
+                style=style,
+                niche=niche,
+                discovery_limit=10 + (attempt * 6),
+                crawl_accounts=6 + (attempt * 2),
+                posts_per_account=24,
+            )
+            bootstrap_summary.append(bootstrap_result)
+
+            if normalized_style in ("single-clip", "multi-clip", "talking-head"):
+                classify_result = api_classify_reels_true_visual(
+                    platform=platform,
+                    niche=niche,
+                    style=style,
+                    limit=24,
+                    fps=1.0,
+                )
+                classification_summary.append(classify_result)
+
+            reindexed_results = search_posts_index(
+                platform=platform,
+                style=style,
+                niche=niche,
+                limit=max(24, min_result_target * 2),
+            )
+            indexed_results = reindexed_results
+            niche_health = get_niche_health(platform=platform, style=style, niche=niche)
+
+            created_posts = int(bootstrap_result.get("created_posts") or 0)
+            updated_labels = int((classification_summary[-1].get("updated") if classification_summary else 0) or 0)
+            if created_posts == 0 and updated_labels == 0:
+                break
+
+        if indexed_results:
+            subtype_notice = ""
+        elif normalized_style in ("single-clip", "multi-clip", "talking-head"):
+            fallback_reels = search_posts_index(platform=platform, style="reel", niche=niche, limit=24)
+            if fallback_reels:
+                subtype_notice = (
+                    f"No {normalized_style} results are classified yet for '{niche}'. "
+                    f"Expanded this niche and found {len(fallback_reels)} reel candidate(s), "
+                    f"but none are labeled confidently enough under this subtype yet."
+                )
+    if indexed_results and len(indexed_results) < min_result_target and niche:
+        subtype_notice = subtype_notice or (
+            f"Only found {len(indexed_results)} strong matches so far for '{niche}'. "
+            f"Search expanded the niche, but the local classified pool is still thin."
+        )
     if indexed_results and niche_health.get("healthy"):
         resp = {
             "platform": platform,
             "style": style,
             "q": "local_index",
-            "results": dedupe_and_truncate(indexed_results, limit=8),
+            "results": dedupe_and_truncate(indexed_results, limit=max(10, min_result_target)),
         }
         if debug:
             resp["debug"] = {
@@ -2505,17 +3494,18 @@ def search(
                 "db": str(DB_FILE),
                 "count": len(indexed_results),
                 "niche_health": niche_health,
+                "bootstrap_summary": bootstrap_summary,
+                "classification_summary": classification_summary,
             }
+        if subtype_notice:
+            resp["notice"] = subtype_notice
         return resp
-
-    # If we reach here, we only use local DB results (no Brave fallback)
-    results = dedupe_and_truncate(indexed_results, limit=8) if indexed_results else []
 
     resp = {
         "platform": platform,
         "style": style,
         "q": "local_index_only",
-        "results": results,
+        "results": dedupe_and_truncate(indexed_results, limit=max(10, min_result_target)) if indexed_results else [],
     }
 
     if debug:
@@ -2526,7 +3516,11 @@ def search(
             "niche_health": niche_health,
             "used_local_only": True,
             "note": "Brave search fully removed. Results are DB-only.",
+            "bootstrap_summary": bootstrap_summary,
+            "classification_summary": classification_summary,
         }
+    if subtype_notice:
+        resp["notice"] = subtype_notice
 
     return resp
 @app.post("/api/expand/niche")
@@ -2666,6 +3660,11 @@ def score_niche_relevance(niche: str, text: str) -> float:
     # clamp + combine
     score = min(1.0, ratio + phrase_boost)
 
+    # For multi-word niches, matching only one token is usually too weak.
+    # Example: "amazon wholesale" should not match generic "amazon" content.
+    if len(niche_tokens) >= 2 and phrase_boost == 0.0 and overlap < 2:
+        score = min(score, 0.24)
+
     return float(max(0.0, min(1.0, score)))
 
 
@@ -2741,6 +3740,12 @@ def infer_style(platform: str, tag: str, fmt: str, text: str = "") -> Dict[str, 
             if any(hint in text for hint in talking_head_hints):
                 return {"style": "talking-head", "confidence": 0.7}
 
+            # Most unlabeled reels in our DB are single continuous clips rather
+            # than edited multi-part sequences. If we have reel text but no
+            # explicit series/multi-clip cues, treat it as a likely single-clip.
+            if len(text) >= 80:
+                return {"style": "single-clip", "confidence": 0.62}
+
             return {"style": "reel", "confidence": 0.5}
 
     if platform == "tiktok":
@@ -2811,8 +3816,10 @@ def classify_reel_from_visual_signals(
         confidence = min(0.95, 0.70 + (fr * 0.35) - (sc * 0.10))
         return ("talking-head", float(max(0.0, confidence)), "rendered_embed_visual_v1")
     
-    if sampled >= 3 and sc >= 0.45:
-        confidence = min(0.95, 0.68 + (sc *0.25))
+    # Multi-clip text reels should show BOTH scene churn and persistent text overlays.
+    # This prevents generic montage/video ads from being mislabeled as list-style reels.
+    if sampled >= 3 and sc >= 0.45 and td >= 0.12:
+        confidence = min(0.95, 0.62 + (sc * 0.20) + (td * 0.20))
         return ("multi-clip", float(max(0.0, confidence)), "rendered_embed_visual_v1")
     
     if td >= 0.18 and sc <= 0.30 and (not has_face or fr < 0.18):

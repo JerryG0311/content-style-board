@@ -77,6 +77,42 @@ def filter_existing_seed_accounts(platform: str, accounts: list[dict]) -> list[d
     existing = {row["handle"] for row in rows}
     return [a for a in deduped if a["handle"] not in existing]
 
+
+# Annotate discovered accounts with whether they already exist in seed_accounts.
+# This is for crawl decisions, not for filtering them out.
+def annotate_existing_seed_accounts(platform: str, accounts: list[dict]) -> list[dict]:
+    """
+    Annotate discovered accounts with whether they already exist in seed_accounts.
+    This is for crawl decisions, not for filtering them out.
+    """
+
+    platform = (platform or "").lower().strip()
+    deduped = dedupe_discovered_accounts(accounts)
+    if not deduped:
+        return []
+
+    handles = [a["handle"] for a in deduped]
+    placeholders = ", ".join("?" for _ in handles)
+
+    with get_db() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT LOWER(handle) AS handle
+            FROM seed_accounts
+            WHERE platform = ?
+              AND LOWER(handle) IN ({placeholders})
+            """,
+            [platform, *handles],
+        ).fetchall()
+
+    existing = {row["handle"] for row in rows}
+    out = []
+    for account in deduped:
+        enriched = dict(account)
+        enriched["already_seeded"] = enriched["handle"] in existing
+        out.append(enriched)
+    return out
+
 def build_instagram_discovery_headers(query: str = "") -> tuple[dict, dict]:
     """
     Build headers/cookies for Instagram-native discovery requests.
@@ -159,6 +195,11 @@ def score_account_for_niche(niche: str, username: str, full_name: str, category:
     if len(username) <= 8 and matched_words <= 1:
         score -= 0.1
 
+    # For compound niches, a one-word overlap is usually too broad.
+    # Example: "amazon wholesale" should not strongly match generic @amazon.
+    if len(niche_words) >= 2 and niche not in hay and matched_words < 2:
+        score = min(score, 0.24)
+
     return float(min(score, 1.0))
 
 def fetch_instagram_topsearch_accounts(query: str, limit: int = 10) -> list[dict]:
@@ -183,8 +224,15 @@ def fetch_instagram_topsearch_accounts(query: str, limit: int = 10) -> list[dict
             allow_redirects=True,
         )
         r.raise_for_status()
-        data = r.json()
-    except Exception:
+
+        try:
+            data = r.json()
+        except Exception:
+            print("[DISCOVERY ERROR] Non-JSON response from Instagram:", r.text[:300])
+            return []
+
+    except Exception as e:
+        print("[DISCOVERY ERROR] Request failed:", str(e))
         return []
     
     users = data.get("users") or []
@@ -258,8 +306,10 @@ def discover_instagram_accounts_for_niche(niche: str, limit: int = 10) -> list[d
     raw_accounts = []
     for query in queries:
         raw_accounts.extend(fetch_instagram_topsearch_accounts(query=query, limit=limit))
+    print(f"[DISCOVERY] Raw accounts count: {len(raw_accounts)}")
 
     deduped = dedupe_discovered_accounts(raw_accounts)
+    print(f"[DISCOVERY] Deduped accounts count: {len(deduped)}")
 
     scored = []
     for account in deduped:
@@ -272,6 +322,7 @@ def discover_instagram_accounts_for_niche(niche: str, limit: int = 10) -> list[d
         enriched = dict(account)
         enriched["niche_score"] = score
         scored.append(enriched)
+    print(f"[DISCOVERY] Scored accounts count: {len(scored)}")
 
     scored.sort(
         key=lambda a: (
@@ -284,6 +335,10 @@ def discover_instagram_accounts_for_niche(niche: str, limit: int = 10) -> list[d
         reverse=True,
     )
 
-    fresh = filter_existing_seed_accounts("instagram", scored)
-    filtered = [a for a in fresh if float(a.get("niche_score") or 0.0) >= 0.35]
+    annotated = annotate_existing_seed_accounts("instagram", scored)
+    fresh_count = sum(1 for a in annotated if not bool(a.get("already_seeded")))
+    print(f"[DISCOVERY] Fresh (not already seeded) count: {fresh_count}")
+
+    filtered = [a for a in annotated if float(a.get("niche_score") or 0.0) >= 0.35]
+    print(f"[DISCOVERY] Filtered (niche score >= 0.35) count: {len(filtered)}")
     return filtered[:limit]

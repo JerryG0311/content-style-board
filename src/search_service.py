@@ -34,6 +34,8 @@ def get_niche_health(platform: str, style: str, niche: str = "") -> dict:
     elif style in ("single-clip", "multi-clip", "talking-head"):
         style_where.append("classified_post_type = ?")
         style_params.append(style)
+        style_where.append("classifier_version LIKE ?")
+        style_params.append("%openai_frames_v1%")
     elif style == "reel":
         style_where.append("post_type = ?")
         style_params.append("reel")
