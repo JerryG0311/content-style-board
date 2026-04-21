@@ -1,6 +1,7 @@
 from dotenv import load_dotenv
 import os
 from fastapi import FastAPI, HTTPException
+from openai import OpenAI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pathlib import Path
@@ -41,7 +42,7 @@ load_dotenv()
 
 
 app = FastAPI(title="Content Style Board")
-
+client = OpenAI()
 
 from urllib.parse import urlparse
 
@@ -2185,6 +2186,42 @@ def collect_instagram_seed_account(handle: str, niche: str = "", max_posts: int 
     prune_posts_for_account("instagram", handle, keep_posts=keep_posts)
     return created
 
+def generate_similar_from_ai(text: str, niche: str, format_type: str) -> str:
+    prompt = f"""
+You are a content strategist.
+
+Take this post and generate NEW content ideas based on it.
+
+ORIGINAL POST:
+{text}
+
+NICHE:
+{niche}
+
+FORMAT:
+{format_type}
+
+Return:
+
+1. 3 new hooks (short, punchy, scroll-stopping)
+2. 3 different content angles (unique perspectives)
+3. 1 full content idea (structured outline)
+
+Make everything feel modern, native to social media, and clearly inspired by the original post without copying it.
+Do NOT repeat the original wording. 
+"""
+    
+    response = client.chat.completions.create(
+        model="gpt-5",
+        messages=[
+            {"role": "system", "content": "You are an expert content creator."},
+            {"role": "user", "content": prompt}
+        ],
+    )
+
+    return response.choices[0].message.content or ""
+
+
 def bootstrap_niche_posts_sync(
     platform: str,
     style: str,
@@ -2392,6 +2429,27 @@ def api_bootstrap_niche(payload: BootstrapNichePayload):
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
+@app.post("/api/generate/similar")
+def generate_similar_idea(payload: dict):
+    try:
+        post_text = payload.get("text") or ""
+        niche = payload.get("niche") or ""
+        format_type = payload.get("format") or "reel"
+
+        if not post_text.strip():
+            return {"ok": False, "error": "Missing post text"}
+        
+        result = generate_similar_from_ai(
+            text=post_text,
+            niche=niche,
+            format_type=format_type,
+        )
+
+        return {"ok": True, "data": result}
+    
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
 
 @app.post("/api/posts")
 def api_upsert_post(payload: PostPayload):
@@ -2471,6 +2529,7 @@ def api_upsert_post_analysis(payload: PostAnalysisPayload):
     )
 
     return {"ok": True, "analysis": serialize_post_analysis_row(row)}
+
 
 def serialize_post_analysis_row(row):
     if not row:

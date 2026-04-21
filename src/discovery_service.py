@@ -1,4 +1,5 @@
 import os
+import re
 from urllib.parse import quote
 
 import requests
@@ -77,6 +78,26 @@ def filter_existing_seed_accounts(platform: str, accounts: list[dict]) -> list[d
     existing = {row["handle"] for row in rows}
     return [a for a in deduped if a["handle"] not in existing]
 
+def normalize_handle_for_similarity(handle: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", (handle or "").lower())
+
+def is_near_duplicate_handle(candidate: str, existing_handles: set[str]) -> bool:
+    normalized = normalize_handle_for_similarity(candidate)
+    if not normalized:
+        return True
+    
+    for existing in existing_handles:
+        if not existing:
+            continue
+        if (
+            normalized == existing
+            or normalized.startswith(existing)
+            or existing.startswith(normalized)
+            or normalized in existing 
+            or existing in normalized
+        ):
+            return True
+    return False 
 
 # Annotate discovered accounts with whether they already exist in seed_accounts.
 # This is for crawl decisions, not for filtering them out.
@@ -343,7 +364,7 @@ def discover_instagram_accounts_for_niche(niche: str, limit: int = 10) -> list[d
     print(f"[DISCOVERY] Filtered (niche score >= 0.35) count: {len(filtered)}")
     return filtered[:limit]
 
-def expand_accounts_from_seed(platform: str, niche: str, limit: int =20) -> list[dict]:
+def expand_accounts_from_seed(platform: str, niche: str, limit: int = 20) -> list[dict]:
     """
     Expand discovery using already-seeded accounts.
     Uses their handles as queries to find adjacent creators.
@@ -363,9 +384,15 @@ def expand_accounts_from_seed(platform: str, niche: str, limit: int =20) -> list
             [platform],
         ).fetchall()
 
-    rows = [dict(row) for row in rows]
-    
-    seed_handles = [row["handle"] for row in rows if row.get("handle")]
+    seed_rows = [dict(row) if not isinstance(row, dict) else row for row in rows]
+    seed_handles = [row["handle"] for row in seed_rows if row.get("handle")]
+
+    existing_normalized_handles = set()
+    for row in seed_rows:
+        handle = (row.get("handle") or "").strip().lower()
+        if handle:
+            existing_normalized_handles.add(normalize_handle_for_similarity(handle))
+
     print(f"[EXPANSION] Using {len(seed_handles)} seed accounts")
 
     raw_accounts = []
@@ -380,10 +407,10 @@ def expand_accounts_from_seed(platform: str, niche: str, limit: int =20) -> list
     scored = []
     for account in deduped:
         score = score_account_for_niche(
-            niche = niche,
-            username = account.get("handle") or "",
-            full_name = account.get("full_name") or "",
-            category = account.get("category") or "",
+            niche=niche,
+            username=account.get("handle") or "",
+            full_name=account.get("full_name") or "",
+            category=account.get("category") or "",
         )
         enriched = dict(account)
         enriched["niche_score"] = score
@@ -393,6 +420,22 @@ def expand_accounts_from_seed(platform: str, niche: str, limit: int =20) -> list
     annotated = annotate_existing_seed_accounts(platform, scored)
     fresh = [a for a in annotated if not a.get("already_seeded")]
 
-    print(f"[EXPANSION] New accounts found: {len(fresh)}")
+    filtered = []
+    for account in fresh:
+        handle = (account.get("handle") or "").strip().lower()
+        if not handle:
+            continue
 
-    return fresh[:limit]
+        is_dup = is_near_duplicate_handle(handle, existing_normalized_handles)
+
+        enriched_account = dict(account)
+        enriched_account["near_duplicate_handle"] = is_dup
+
+        filtered.append(enriched_account)
+
+    print(f"[EXPANSION] New accounts found: {len(fresh)}")
+    
+    dup_count = sum(1 for a in filtered if a.get("near_duplicate_handle"))
+    print(f"[EPANSION] Marked {dup_count} near-duplicate accounts (not removed)")
+
+    return filtered[:limit]
