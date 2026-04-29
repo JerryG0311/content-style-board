@@ -69,7 +69,8 @@
         display: flex;
         flex-direction: column;
         min-height: 0;
-        overflow: hidden;
+        overflow-y: auto;
+        overflow-x: hidden;
         position: relative;
         z-index: 20;
         visibility: visible;
@@ -93,14 +94,36 @@
       }
 
       .analysis-panel-body {
-        flex: 1;
-        min-height: 0;
-        overflow: auto;
         padding: 16px;
         display: flex;
         flex-direction: column;
         gap: 14px;
       }
+
+      .analysis-panel-section {
+        padding: 16px;
+        border-top: 1px solid #e6e6ef;
+      }
+
+      .analysis-panel-section h2 {
+        margin: 0;
+        font-size: 16px;
+        line-height: 1.2;
+      }
+
+      .analysis-panel-section p {
+        margin: 6px 0 0;
+        font-size: 13px;
+        color: #666;
+      }
+
+      .ai-generator-body {
+        padding: 12px 16px 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+    
 
       .analysis-empty {
         border: 1px dashed #d8d8e6;
@@ -523,6 +546,28 @@
               Click any post card on the board to load its analysis.
               <br /><br />
               If that post has not been analyzed yet, you will see an empty state here instead.
+            </div>
+          </div>
+          <!-- AI IDEA GENERATOR -->
+          <div class="analysis-panel-section">
+            <h2>AI Idea Generator</h2>
+            <p>Generate similar content from selected post</p>
+          </div>
+
+          <div class="ai-generator-body">
+            <textarea
+              id="aiInput"
+              placeholder="Describe what you want (or use selected post)..."
+              style="width:100%; min-height:80px; padding:10px; border-radius:10px; border:1px solid #e6e6ef;"
+            ></textarea>
+
+            <button id="generateBtn">Generate Ideas</button>
+
+            <div
+              id="aiOutput"
+              style="white-space:pre-wrap; font-size:13px; line-height:1.5; color:#111; background:#fafafe; padding:10px; border-radius:10px; border:1px solid #e6e6ef;"
+            >
+              Your AI ideas will show here...
             </div>
           </div>
         </aside>
@@ -1825,6 +1870,205 @@ searchBtn.addEventListener("click", async () => {
   runSearch();
 });
 
+const generateBtn = document.getElementById("generateBtn");
+const aiInput = document.getElementById("aiInput");
+const aiOutput = document.getElementById("aiOutput");
+
+generateBtn.addEventListener("click", async () => {
+  let text = aiInput.value.trim();
+
+  // If no input, use selected tile
+  if (!text && selectedTile) {
+    text = selectedTile.dataset.title || "";
+  }
+
+  if (!text) {
+    alert("Enter something or select a post first.");
+    return;
+  }
+
+  aiOutput.textContent = "Generating...";
+
+  try {
+    const res = await fetch("/api/generate/similar", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        text,
+        niche: nicheInput.value || "general",
+        format: document.getElementById("styleSelect").value || "reel",
+        context: selectedTile
+          ? {
+            original_title: selectedTile.dataset.title || "",
+            original_description: selectedTile.dataset.description || "",
+            originalUrl: selectedTile.dataset.postUrl || selectedTile.dataset.url || "",
+            account_handle: selectedTile.dataset.accountHandle || "",
+            post_type: selectedTile.dataset.tag || "",
+            niche: selectedTile.dataset.niche || nicheInput.value || "",
+            }
+          : {},
+      }),
+    });
+
+    const data = await res.json();
+
+    if (!data.ok) {
+      aiOutput.textContent = "Error: " + data.error;
+      return;
+    }
+
+    const raw = data.data || "";
+
+    // Split sections
+    const hooksMatch = raw.match(/1\)[\s\S]*?2\)/);
+    const anglesMatch = raw.match(/2\)[\s\S]*?3\)/);
+    const fullMatch = raw.match(/3\)[\s\S]*/);
+
+    const hooksText = hooksMatch ? hooksMatch[0].replace(/1\)\s*Hooks/i, "").replace(/2\)/, "").trim() : "";
+    const anglesText = anglesMatch ? anglesMatch[0].replace(/2\)\s*Content angles/i, "").replace(/3\)/, "").trim() : "";
+    const fullText = fullMatch ? fullMatch[0].replace(/3\)\s*Full content idea/i, "").trim() : "";
+
+    // Parse bullet lines into arrays
+    const hooks = hooksText.split("\n").map(l => l.replace(/^- /, "").trim()).filter(Boolean);
+    const angles = anglesText.split("\n").map(l => l.replace(/^- /, "").trim()).filter(Boolean);
+
+    // Render HOOK TILES
+    const hookTiles = hooks.map(h => `
+      <div style="
+        border:1px solid #ececf4;
+        padding:10px;
+        border-radius:10px;
+        background:#fff;
+        display:flex;
+        flex-direction:column;
+        gap:8px;
+      ">
+        <div style="cursor:pointer;" onclick="navigator.clipboard.writeText(\`${h}\`)">
+          ${h}
+        </div>
+
+        <button onclick="generateFullPostFromHook(\`${h.replace(/`/g, "\\`")}\`)" style="
+          font-size:12px;
+          padding:6px 8px;
+          border-radius:8px;
+          border:1px solid #e6e6ef;
+          background:#fafafe;
+          cursor:pointer;
+        ">
+          Generate Full Post
+        </button>
+      </div>
+    `).join("");
+
+    // Render ANGLE TILES (optional)
+    const angleTiles = angles.map(a => `
+      <div style="
+        border:1px solid #ececf4;
+        padding:10px;
+        border-radius:10px;
+        background:#fafafe;
+      ">
+        ${a}
+      </div>
+    `).join("");
+
+    aiOutput.innerHTML = `
+      <div style="display:flex; flex-direction:column; gap:12px;">
+        
+        <div>
+          <strong>Hooks</strong>
+
+          <div style="font-size:12px; color:#666; margin-top:4px;">
+            Click a hook to copy
+          </div>
+
+          <div style="display:grid; gap:8px; margin-top:6px;">
+            ${hookTiles || "<div>No hooks generated</div>"}
+          </div>
+
+          <button style="margin-top:6px;">
+            Create Post
+          </button>
+        </div>
+
+        <div>
+          <strong>Angles</strong>
+          <div style="display:grid; gap:8px; margin-top:6px;">
+            ${angleTiles || "<div>No angles</div>"}
+          </div>
+        </div>
+
+        <div>
+          <strong>Full Idea</strong>
+          <div style="white-space:pre-wrap; font-size:13px; margin-top:6px;">
+            ${fullText || ""}
+          </div>
+        </div>
+
+      </div>
+    `;
+  } catch (err) {
+    console.error(err);
+    aiOutput.textContent = "Failed to generate ideas.";
+  }
+});
+
+// --- Generate Full Post from Hook ---
+async function generateFullPostFromHook(hook) {
+  aiOutput.innerHTML = "Generating full post...";
+
+  try {
+    const res = await fetch("/api/generate/similar", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        text: hook,
+        niche: nicheInput.value || "general",
+        format: document.getElementById("styleSelect").value || "reel",
+        context: selectedTile
+          ? {
+              original_title: selectedTile.dataset.title || "",
+              original_description: selectedTile.dataset.description || "",
+              original_url: selectedTile.dataset.postUrl || selectedTile.dataset.url || "",
+              account_handle: selectedTile.dataset.accountHandle || "",
+              post_type: selectedTile.dataset.tag || "",
+              niche: selectedTile.dataset.niche || nicheInput.value || "",
+            }
+          : {},
+      }),
+    });
+
+    const data = await res.json();
+
+    if (!data.ok) {
+      aiOutput.textContent = "Error: " + data.error;
+      return;
+    }
+
+    aiOutput.innerHTML = `
+      <div style="display:flex; flex-direction:column; gap:12px;">
+        <div>
+          <strong>Hook</strong>
+          <div style="margin-top:6px;">${hook}</div>
+        </div>
+
+        <div>
+          <strong>Full Post</strong>
+          <div style="white-space:pre-wrap; font-size:13px; margin-top:6px;">
+            ${data.data}
+          </div>
+        </div>
+      </div>
+    `;
+  } catch (err) {
+    console.error(err);
+    aiOutput.textContent = "Failed to generate full post.";
+  }
+}
 </script>
 
   </body>

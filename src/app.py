@@ -2186,29 +2186,57 @@ def collect_instagram_seed_account(handle: str, niche: str = "", max_posts: int 
     prune_posts_for_account("instagram", handle, keep_posts=keep_posts)
     return created
 
-def generate_similar_from_ai(text: str, niche: str, format_type: str) -> str:
+def generate_similar_from_ai(text: str, niche: str, format_type: str, context: dict | None = None) -> str:
+    context = context or {}
+    original_title = context.get("original_title") or ""
+    original_description = context.get("original_description") or ""
+    original_url = context.get("original_url") or ""
+    account_handle = context.get("account_handle") or ""
+    post_type = context.get("post_type") or format_type
+    context_niche = context.get("niche") or niche 
+
     prompt = f"""
-You are a content strategist.
+You are a senior social media strategist and direct-response content creator.
 
-Take this post and generate NEW content ideas based on it.
+Your job is to remix a real piece of content into new content ideas without copying the original wording.
 
-ORIGINAL POST:
+USER REQUEST OR SELECTED HOOK:
+
 {text}
 
-NICHE:
+TARGET NICHE:
+
 {niche}
 
-FORMAT:
+TARGET FORMAT:
+
 {format_type}
 
-Return:
+SELECTED POST CONTEXT:
 
-1. 3 new hooks (short, punchy, scroll-stopping)
-2. 3 different content angles (unique perspectives)
-3. 1 full content idea (structured outline)
+- Original title/caption: {original_title}
+- Original description: {original_description}
+- Account handle: {account_handle}
+- Original post type: {post_type}
+- Original post niche: {context_niche}
+- Original URL: {original_url}
 
-Make everything feel modern, native to social media, and clearly inspired by the original post without copying it.
-Do NOT repeat the original wording. 
+Return exactly these sections:
+
+1) Hooks
+- 3 short, punchy hooks inspired by the selected post/context
+
+2) Content angles
+- 3 different angles that preserve the underlying pattern but change the surface idea
+
+3) Full content idea
+- 1 practical content outline with structure, talking points, and CTA
+
+Rules:
+- Do not copy the original wording.
+- Keep the ideas native to the target platform/format.
+- Use the selected post context if available.
+- Make it immediately usable for a creator.
 """
     
     response = client.chat.completions.create(
@@ -2439,10 +2467,12 @@ def generate_similar_idea(payload: dict):
         if not post_text.strip():
             return {"ok": False, "error": "Missing post text"}
         
+        context = payload.get("context") or {}
         result = generate_similar_from_ai(
             text=post_text,
             niche=niche,
             format_type=format_type,
+            context=context,
         )
 
         return {"ok": True, "data": result}
