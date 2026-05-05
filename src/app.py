@@ -2249,6 +2249,73 @@ Rules:
 
     return response.choices[0].message.content or ""
 
+def chat_with_content_ai(message: str, niche: str, format_type: str, context: dict | None = None, history: list | None = None) -> str:
+    context = context or {}
+    history = history or []
+
+    original_title = context.get("original_tutle") or ""
+    original_description = context.get("original_description") or ""
+    original_url = context.get("original_url") or ""
+    account_handle = context.get("account_handle") or ""
+    post_type = context.get("post_tyoe") or format_type
+    context_niche = context.get("niche") or niche
+
+    compact_history = []
+    for item in history[-8:]:
+        if not isinstance(item, dict):
+            continue
+        role = (item.get("role") or "").strip()
+        content = (item.get("content") or "").strip()
+        if role in ("user", "assistant") and content:
+            compact_history.append({"role": role, "content": content[:1500]})
+    
+    system_prompt = """
+You are an AI content strategist inside a visual content research board.
+
+Help the user turn selected posts into better content ideas, hooks, outlines, scripts, captions, CTAs, and rewrites.
+
+Be specific, practical, and concise. Use the selected post context when available. Never copy the original post word-for-word.
+
+""".strip()
+    
+    context_prompt = f"""
+CURRENT TARGET NICHE:
+
+{niche}
+
+CURRENT TARGET FORMAT:
+
+{format_type}
+
+SELECTED POST CONTEXT:
+
+- Original title/caption: {original_title}
+
+- Original description: {original_description}
+
+- Account handle: {account_handle}
+
+- Original post type: {post_type}
+
+- Original post niche: {context_niche}
+
+- Original URL: {original_url}
+
+""".strip()
+    
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": context_prompt},
+    ]
+    messages.extend(compact_history)
+    messages.append({"role": "user", "content": message})
+
+    response = client.chat.completions.create(
+        model="gpt-5",
+        messages=messages,
+    )
+
+    return response.choices[0].message.content or ""
 
 def bootstrap_niche_posts_sync(
     platform: str,
@@ -2394,6 +2461,13 @@ class BootstrapNichePayload(BaseModel):
     crawl_accounts: int = 8
     posts_per_account: int = 24
 
+class ChatPayload(BaseModel):
+    message: str
+    niche: str = "general"
+    format: str = "reel"
+    context: dict = {}
+    history: list = []
+
 
 @app.post("/api/board/save")
 def save_board(payload: BoardPayload):
@@ -2479,6 +2553,27 @@ def generate_similar_idea(payload: dict):
     
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+@app.post("/api/chat")
+def chat_endpoint(payload: ChatPayload):
+    message = (payload.message or "").strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="message is required")
+    
+    try:
+        result = chat_with_content_ai(
+            message=message,
+            niche=payload.niche or "general",
+            format_type=payload.format or "reel",
+            context=payload.context or {},
+            history=payload.history or [],
+        )
+        return {"ok": True, "data": result}
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"ok": False, "error": str(e)},
+        )
 
 
 @app.post("/api/posts")

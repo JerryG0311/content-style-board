@@ -123,8 +123,81 @@
         flex-direction: column;
         gap: 10px;
       }
-    
 
+      .ai-chat-box {
+        margin-top: 18px;
+        padding-top: 18px;
+        border-top: 1px solid #e5e7eb;
+      }
+
+      .ai-chat-title {
+        font-weight: 700;
+        font-size: 15px;
+        margin-bottom: 4px;
+      }
+
+      .ai-chat-subtitle {
+        color: #6b7280;
+        font-size: 12px;
+        margin-bottom: 12px;
+      }
+
+      .ai-chat-messages {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        max-height: 280px;
+        overflow-y: auto;
+        margin-bottom: 10px;
+      }
+
+      .ai-chat-message {
+        border: 1px solid #e5e7eb;
+        border-radius: 12px;
+        padding: 10px 12px;
+        font-size: 13px;
+        line-height: 1.45;
+        white-space: pre-wrap;
+        background: #ffffff;
+      }
+
+      .ai-chat-message.user {
+        background: #f8fafc;
+      }
+
+      .ai-chat-message.assistant {
+        background: #fff7fb;
+        border-color: #f9cfe0;
+      }
+
+      .ai-chat-input {
+        width: 100%;
+        min-height: 82px;
+        resize: vertical;
+        border: 1px solid #d1d5db;
+        border-radius: 12px;
+        padding: 10px;
+        font-size: 13px;
+        box-sizing: border-box;
+      }
+
+      .ai-chat-send-btn {
+        width: 100%;
+        margin-top: 8px;
+        border: 1px solid #2563eb;
+        border-radius: 10px;
+        background: #ffffff;
+        color: #111827;
+        padding: 10px 12px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+
+      .ai-chat-send-btn:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+      }
+    
       .analysis-empty {
         border: 1px dashed #d8d8e6;
         background: #fafafe;
@@ -568,6 +641,13 @@
               style="white-space:pre-wrap; font-size:13px; line-height:1.5; color:#111; background:#fafafe; padding:10px; border-radius:10px; border:1px solid #e6e6ef;"
             >
               Your AI ideas will show here...
+            </div>
+            <div class="ai-chat-box">
+              <div class="ai-chat-title">AI Chat</div>
+              <div class="ai-chat-subtitle">Ask follow-up questions about the selected post.</div>
+              <div id="aiChatMessages" class="ai-chat-messages"></div>
+              <textarea id="aiChatInput" class="ai-chat-input" placeholder="Ask AI what to do with the selected post..."></textarea>
+              <button id="aiChatSendBtn" class="ai-chat-send-btn">Send</button>
             </div>
           </div>
         </aside>
@@ -1224,6 +1304,8 @@ platformSelect.addEventListener("change", () => {
         if (selectedTile) selectedTile.classList.remove("is-selected");
         selectedTile = tile;
         selectedTile.classList.add("is-selected");
+        aiChatHistory = [];
+        if (aiChatMessages) aiChatMessages.innerHTML = "";
 
         await loadAnalysisForTile(tile);
       });
@@ -1237,6 +1319,8 @@ platformSelect.addEventListener("change", () => {
         if (selectedTile) selectedTile.classList.remove("is-selected");
         selectedTile = tile;
         selectedTile.classList.add("is-selected");
+        aiChatHistory = [];
+        if (aiChatMessages) aiChatMessages.innerHTML = "";
 
         await loadAnalysisForTile(tile);
       });
@@ -1873,6 +1957,10 @@ searchBtn.addEventListener("click", async () => {
 const generateBtn = document.getElementById("generateBtn");
 const aiInput = document.getElementById("aiInput");
 const aiOutput = document.getElementById("aiOutput");
+const aiChatMessages = document.getElementById("aiChatMessages");
+const aiChatInput = document.getElementById("aiChatInput");
+const aiChatSendBtn = document.getElementById("aiChatSendBtn");
+let aiChatHistory = [];
 
 generateBtn.addEventListener("click", async () => {
   let text = aiInput.value.trim();
@@ -1903,7 +1991,7 @@ generateBtn.addEventListener("click", async () => {
           ? {
             original_title: selectedTile.dataset.title || "",
             original_description: selectedTile.dataset.description || "",
-            originalUrl: selectedTile.dataset.postUrl || selectedTile.dataset.url || "",
+            original_url: selectedTile.dataset.postUrl || selectedTile.dataset.url || "",
             account_handle: selectedTile.dataset.accountHandle || "",
             post_type: selectedTile.dataset.tag || "",
             niche: selectedTile.dataset.niche || nicheInput.value || "",
@@ -2014,6 +2102,73 @@ generateBtn.addEventListener("click", async () => {
     aiOutput.textContent = "Failed to generate ideas.";
   }
 });
+
+function getSelectedPostContext() {
+  return selectedTile
+    ? {
+        original_title: selectedTile.dataset.title || "",
+        original_description: selectedTile.dataset.description || "",
+        original_url: selectedTile.dataset.postUrl || selectedTile.dataset.url || "",
+        account_handle: selectedTile.dataset.accountHandle || "",
+        post_type: selectedTile.dataset.tag || "",
+        niche: selectedTile.dataset.niche || nicheInput.value || "",
+      }
+    : {};
+}
+
+function appendAiChatMessage(role, content) {
+  if (!aiChatMessages) return;
+  const messageEl = document.createElement("div");
+  messageEl.className = `ai-chat-message ${role}`;
+  messageEl.textContent = content;
+  aiChatMessages.appendChild(messageEl);
+  aiChatMessages.scrollTop = aiChatMessages.scrollHeight;
+}
+
+if (aiChatSendBtn && aiChatInput) {
+  aiChatInput.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" || e.shiftKey) return;
+    e.preventDefault();
+    aiChatSendBtn.click();
+  });
+  aiChatSendBtn.addEventListener("click", async () => {
+    const message = aiChatInput.value.trim();
+    if (!message) return;
+
+    appendAiChatMessage("user", message);
+    aiChatHistory.push({ role: "user", content: message });
+    aiChatInput.value = "";
+    aiChatSendBtn.disabled = true;
+    aiChatSendBtn.textContent = "Thinking...";
+
+    try {
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message,
+          niche: nicheInput.value || "general",
+          format: document.getElementById("styleSelect").value || "reel",
+          context: getSelectedPostContext(),
+          history: aiChatHistory.slice(-8),
+        }),
+      });
+
+      const data = await res.json();
+      const reply = data.ok ? data.data : `Error: ${data.error || "Something went wrong"}`;
+
+      appendAiChatMessage("assistant", reply);
+      aiChatHistory.push({ role: "assistant", content: reply });
+    } catch (err) {
+      const errorMessage = `Error: ${err.message || err}`;
+      appendAiChatMessage("assistant", errorMessage);
+      aiChatHistory.push({ role: "assistant", content: errorMessage});
+    } finally {
+      aiChatSendBtn.disabled = false;
+      aiChatSendBtn.textContent = "Send";
+    }
+  });
+}
 
 // --- Generate Full Post from Hook ---
 async function generateFullPostFromHook(hook) {
