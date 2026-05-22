@@ -8,39 +8,228 @@
       * {
         box-sizing: border-box;
       }
+      :root {
+        --bg: #f4f5f8;
+        --surface: #ffffff;
+        --surface-soft: #fbfbfd;
+        --surface-muted: #f8fafc;
+        --border: #e5e7eb;
+        --border-strong: #d9dde7;
+        --text: #0f172a;
+        --text-muted: #64748b;
+        --text-soft: #94a3b8;
+        --primary: #2563eb;
+        --primary-dark: #1d4ed8;
+        --primary-soft: rgba(37, 99, 235, 0.10);
+        --pink-soft: #fff7fb;
+        --pink-border: #f8cfe0;
+        --success: #16a34a;
+        --warning: #f59e0b;
+        --danger: #ef4444;
+        --radius-sm: 10px;
+        --radius-md: 14px;
+        --radius-lg: 18px;
+        --radius-xl: 22px;
+        --shadow-xs: 0 1px 2px rgba(15, 23, 42, 0.04);
+        --shadow-sm: 0 8px 18px rgba(15, 23, 42, 0.08);
+        --shadow-md: 0 18px 46px rgba(15, 23, 42, 0.10);
+        --shadow-lg: 0 24px 70px rgba(15, 23, 42, 0.16);
+        --ease: cubic-bezier(.2,.8,.2,1);
+      }
       body {
         margin: 0;
-        font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial;
-        background: #f6f6fb;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
+        background: var(--bg);
+        color: var(--text);
         min-height: 100vh;
         height: 100vh;
         overflow: hidden;
         display: flex;
         flex-direction: column;
+        -webkit-font-smoothing: antialiased;
+        text-rendering: optimizeLegibility;
+      }
+
+      .app-shell {
+        height: 100vh;
+        display: grid;
+        grid-template-columns: 68px minmax(0, 1fr) 720px;
+        background: var(--bg);
+      }
+
+      .left-rail {
+        background: #0f172a;
+        border-right: 1px solid rgba(255,255,255,0.08);
+        padding: 14px 10px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 12px;
+        color: #fff;
+        z-index: 2000;
+      }
+
+      .rail-logo {
+        width: 42px;
+        height: 42px;
+        border-radius: 14px;
+        display: grid;
+        place-items: center;
+        background: linear-gradient(135deg, #2563eb, #7c3aed);
+        color: #fff;
+        font-weight: 800;
+        letter-spacing: -0.06em;
+        box-shadow: 0 14px 34px rgba(37,99,235,0.35);
+      }
+
+      .rail-divider {
+        width: 32px;
+        height: 1px;
+        background: rgba(255,255,255,0.12);
+        margin: 4px 0;
+      }
+
+      .rail-btn {
+        width: 42px;
+        height: 42px;
+        border-radius: 14px;
+        border: 1px solid rgba(255,255,255,0.10);
+        background: rgba(255,255,255,0.04);
+        color: rgba(255,255,255,0.72);
+        display: grid;
+        place-items: center;
+        cursor: pointer;
+        transition: transform 0.18s var(--ease), background 0.18s var(--ease), color 0.18s var(--ease), border-color 0.18s var(--ease);
+      }
+
+      .rail-btn:hover,
+      .rail-btn.is-active {
+        background: rgba(255,255,255,0.12);
+        color: #fff;
+        border-color: rgba(255,255,255,0.20);
+        transform: translateY(-1px);
+        box-shadow: none;
+      }
+
+      .rail-spacer {
+        flex: 1;
+      }
+
+      .app-main {
+        min-width: 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+
+      .topbar-title {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        min-width: 180px;
+      }
+      
+      .topbar-center {
+        flex: 1;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+      }
+
+      .workspace-pill {
+        padding: 10px 18px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        background: rgba(248, 250, 252, 0.9);
+        color: var(--text-muted);
+        font-size: 13px;
+        font-weight: 700;
+        letter-spacing: -0.01em;
+        box-shadow: var(--shadow-xs);
+      }
+
+      .topbar-kicker {
+        font-size: 11px;
+        color: var(--text-soft);
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+
+      .topbar-title strong {
+        font-size: 15px;
+        line-height: 1;
+      }
+
+      .toolbar-actions {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
       }
       header {
-        padding: 14px 16px;
-        background: white;
-        border-bottom: 1px solid #e6e6ef;
+        padding: 14px 18px;
+        background: rgba(255, 255, 255, 0.88);
+        backdrop-filter: blur(18px);
+        border-bottom: 1px solid var(--border);
         display: flex;
-        gap: 10px;
+        gap: 12px;
         align-items: center;
-        flex-wrap: wrap;
+        flex-wrap: nowrap;
         flex: 0 0 auto;
         position: sticky;
         top: 0;
         z-index: 1000;
+        box-shadow: var(--shadow-xs);
       }
-      input { flex: 1; padding: 10px 12px; border: 1px solid #e6e6ef; border-radius: 10px; }
-      #nicheInput, #seedInput {
-        flex: 0 1 320px;
-        min-width: 220px;
+      input {
+        flex: 1;
+        padding: 10px 12px;
+        border: 1px solid var(--border-strong);
+        border-radius: var(--radius-md);
+        background: var(--surface);
+        color: var(--text);
+        font-size: 13px;
+        outline: none;
+        transition: border-color 0.18s var(--ease), box-shadow 0.18s var(--ease), background 0.18s var(--ease);
+      }
+
+      input:focus,
+      textarea:focus,
+      select:focus {
+        border-color: #2563eb;
+        box-shadow: 0 0 0 4px var(--primary-soft);
       }
 
       header strong {
         flex: 0 0 auto;
+        font-size: 14px;
+        letter-spacing: -0.02em;
+        color: var(--text);
+        margin-right: 4px;
       }
-      button { padding: 10px 12px; border: 1px solid #e6e6ef; background: white; border-radius: 10px; cursor: pointer; }
+      button {
+        padding: 10px 12px;
+        border: 1px solid var(--border-strong);
+        background: var(--surface);
+        border-radius: var(--radius-md);
+        cursor: pointer;
+        color: var(--text);
+        font-weight: 650;
+        font-size: 13px;
+        transition: transform 0.18s var(--ease), box-shadow 0.18s var(--ease), border-color 0.18s var(--ease), background 0.18s var(--ease), color 0.18s var(--ease);
+      }
+
+      button:hover {
+        border-color: #c9d1df;
+        box-shadow: var(--shadow-sm);
+        transform: translateY(-1px);
+      }
+
+      button:active {
+        transform: translateY(0) scale(0.99);
+        box-shadow: none;
+      }
       main {
         flex: 1 1 auto;
         min-height: 0;
@@ -51,93 +240,285 @@
       }
 
       .workspace {
+        position: relative;
         flex: 1 1 auto;
         width: 100%;
         min-width: 0;
         min-height: 0;
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) 360px;
         overflow: hidden;
       }
 
-      .analysis-panel {
-        width: 360px;
-        min-width: 360px;
-        max-width: 360px;
-        background: #ffffff;
-        border-left: 1px solid #e6e6ef;
+      .side-panel {
+        min-width: 0;
+        height: 100vh;
+        background: rgba(255,255,255,0.94);
+        border-left: 1px solid var(--border);
+        box-shadow: -18px 0 46px rgba(15, 23, 42, 0.08);
         display: flex;
         flex-direction: column;
+        overflow: hidden;
+        z-index: 1500;
+      }
+
+      .side-panel-top {
+        height: 58px;
+        padding: 0 18px;
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        background: rgba(255,255,255,0.86);
+        backdrop-filter: blur(18px);
+      }
+
+      .side-panel-eyebrow {
+        font-size: 11px;
+        color: var(--text-soft);
+        font-weight: 800;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+
+      .side-panel-title {
+        margin-top: 2px;
+        font-size: 15px;
+        font-weight: 800;
+        letter-spacing: -0.03em;
+      }
+
+      .side-panel-body {
+        flex: 1;
         min-height: 0;
+        overflow: auto;
+      }
+
+      .panel-view {
+        display: none;
+        height: 100%;
+        min-height: 0;
+      }
+
+      .panel-view.is-active {
+        display: flex;
+        flex-direction: column;
+      }
+
+      .panel-view-inner {
+        padding: 18px;
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+      }
+
+      .panel-close-btn {
+        width: 34px;
+        height: 34px;
+        border-radius: 12px;
+        padding: 0;
+        display: grid;
+        place-items: center;
+        color: var(--text-muted);
+      }
+
+      .ai-input {
+        width: 100%;
+        min-height: 100px;
+        resize: vertical;
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        background: var(--surface);
+        padding: 14px;
+        font-size: 13px;
+        outline: none;
+      }
+
+      .ai-output {
+        margin-top: 14px;
+        border: 1px solid var(--border);
+        border-radius: 18px;
+        background: var(--surface);
+        padding: 16px;
+        min-height: 120px;
+        font-size: 13px;
+        line-height: 1.6;
+        white-space: pre-wrap;
+      }
+
+      .prompt-grid,
+      .quick-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+        margin-top: 12px;
+      }
+
+      .glass-btn {
+        border-radius: 14px;
+        border: 1px solid var(--border);
+        background: rgba(255,255,255,0.82);
+        padding: 10px 12px;
+        font-size: 12px;
+        font-weight: 700;
+        color: var(--text-muted);
+      }
+
+      .primary-btn {
+        width: 100%;
+        margin-top: 12px;
+        background: #0f172a;
+        color: #fff;
+        border-color: #0f172a;
+        border-radius: 16px;
+        padding: 12px;
+        font-weight: 700;
+      }
+
+      .chat-feed {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
         overflow-y: auto;
-        overflow-x: hidden;
-        position: relative;
-        z-index: 20;
-        visibility: visible;
+        max-height: 240px;
+        margin-top: 14px;
+      }
+
+      .chat-bubble {
+        border-radius: 18px;
+        padding: 12px 14px;
+        font-size: 13px;
+        line-height: 1.55;
+        white-space: pre-wrap;
+      }
+
+      .chat-bubble.user {
+        background: #eff6ff;
+        margin-left: 40px;
+      }
+
+      .chat-bubble.assistant {
+        background: #fff7fb;
+        border: 1px solid #f8cfe0;
+        margin-right: 28px;
+      }
+
+      @keyframes panelIn {
+        from { opacity: 0; transform: translateX(12px); }
+        to { opacity: 1; transform: translateX(0); }
       }
 
       .analysis-panel-header {
-        padding: 16px;
-        border-bottom: 1px solid #e6e6ef;
+        padding: 18px 18px 16px;
+        border-bottom: 1px solid var(--border);
+        background: var(--surface);
+        position: sticky;
+        top: 0;
+        z-index: 5;
       }
 
       .analysis-panel-header h2 {
         margin: 0;
-        font-size: 16px;
+        font-size: 17px;
         line-height: 1.2;
+        letter-spacing: -0.03em;
+        color: var(--text);
       }
 
       .analysis-panel-header p {
         margin: 6px 0 0;
         font-size: 13px;
-        color: #666;
+        color: var(--text-muted);
       }
 
       .analysis-panel-body {
-        padding: 16px;
+        padding: 18px;
         display: flex;
         flex-direction: column;
         gap: 14px;
       }
 
       .analysis-panel-section {
-        padding: 16px;
-        border-top: 1px solid #e6e6ef;
+        padding: 18px 18px 10px;
+        border-top: 1px solid var(--border);
+        background: var(--surface-soft);
       }
 
       .analysis-panel-section h2 {
         margin: 0;
-        font-size: 16px;
+        font-size: 15px;
         line-height: 1.2;
+        letter-spacing: -0.025em;
+        color: var(--text);
       }
 
       .analysis-panel-section p {
         margin: 6px 0 0;
         font-size: 13px;
-        color: #666;
+        color: var(--text-muted);
       }
 
       .ai-generator-body {
-        padding: 12px 16px 16px;
+        padding: 12px 18px 24px;
         display: flex;
         flex-direction: column;
-        gap: 10px;
+        gap: 12px;
+      }
+
+      .prompt-chips {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+      }
+
+      .prompt-chip {
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        background: var(--surface);
+        color: var(--text-muted);
+        padding: 8px 10px;
+        font-size: 12px;
+        font-weight: 700;
+        cursor: pointer;
+        transition: transform 0.18s var(--ease), border-color 0.18s var(--ease), color 0.18s var(--ease), background 0.18s var(--ease);
+      }
+
+      .prompt-chip:hover {
+        transform: translateY(-1px);
+        border-color: rgba(37, 99, 235, 0.35);
+        color: var(--primary);
+        background: #eff6ff;
+      }
+
+      .quick-actions {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+      }
+
+      .quick-action-btn {
+        border-radius: 14px;
+        background: var(--surface);
+        border-color: var(--border);
+        color: var(--text);
+        font-size: 12px;
+        padding: 9px 10px;
       }
 
       .ai-chat-box {
-        margin-top: 18px;
+        margin-top: 16px;
         padding-top: 18px;
         border-top: 1px solid #e5e7eb;
       }
 
       .ai-chat-title {
-        font-weight: 700;
+        font-weight: 750;
         font-size: 15px;
         margin-bottom: 4px;
+        letter-spacing: -0.02em;
+        color: #0f172a;
       }
 
       .ai-chat-subtitle {
-        color: #6b7280;
+        color: #64748b;
         font-size: 12px;
         margin-bottom: 12px;
       }
@@ -146,51 +527,66 @@
         display: flex;
         flex-direction: column;
         gap: 10px;
-        max-height: 280px;
+        max-height: 360px;
         overflow-y: auto;
         margin-bottom: 10px;
+        scroll-behavior: smooth;
       }
 
       .ai-chat-message {
-        border: 1px solid #e5e7eb;
-        border-radius: 12px;
-        padding: 10px 12px;
+        border: 1px solid var(--border);
+        border-radius: 18px;
+        padding: 12px 13px;
         font-size: 13px;
-        line-height: 1.45;
+        line-height: 1.52;
         white-space: pre-wrap;
-        background: #ffffff;
+        background: var(--surface);
+        box-shadow: var(--shadow-xs);
+        animation: messageIn 0.24s var(--ease) both;
+      }
+
+      @keyframes messageIn {
+        from { opacity: 0; transform: translateY(6px) scale(0.99); }
+        to { opacity: 1; transform: translateY(0) scale(1); }
       }
 
       .ai-chat-message.user {
-        background: #f8fafc;
+        background: var(--surface-muted);
+        border-color: #e2e8f0;
+        margin-left: 34px;
       }
 
       .ai-chat-message.assistant {
-        background: #fff7fb;
-        border-color: #f9cfe0;
+        background: var(--pink-soft);
+        border-color: var(--pink-border);
+        margin-right: 22px;
       }
 
       .ai-chat-input {
         width: 100%;
-        min-height: 82px;
+        min-height: 92px;
         resize: vertical;
-        border: 1px solid #d1d5db;
-        border-radius: 12px;
-        padding: 10px;
+        border: 1px solid #d9dde7;
+        border-radius: 14px;
+        padding: 12px;
         font-size: 13px;
         box-sizing: border-box;
+        background: #ffffff;
+        outline: none;
+        transition: border-color 0.18s ease, box-shadow 0.18s ease;
       }
 
       .ai-chat-send-btn {
         width: 100%;
         margin-top: 8px;
         border: 1px solid #2563eb;
-        border-radius: 10px;
-        background: #ffffff;
-        color: #111827;
-        padding: 10px 12px;
-        font-weight: 600;
+        border-radius: 14px;
+        background: #2563eb;
+        color: #ffffff;
+        padding: 11px 12px;
+        font-weight: 700;
         cursor: pointer;
+        box-shadow: 0 8px 18px rgba(37, 99, 235, 0.18);
       }
 
       .ai-chat-send-btn:disabled {
@@ -199,20 +595,297 @@
       }
     
       .analysis-empty {
-        border: 1px dashed #d8d8e6;
-        background: #fafafe;
-        border-radius: 14px;
+        border: 1px dashed #cbd5e1;
+        background: #ffffff;
+        border-radius: 16px;
         padding: 16px;
-        color: #666;
+        color: #64748b;
         font-size: 14px;
         line-height: 1.5;
       }
 
-      .analysis-card {
-        border: 1px solid #ececf4;
-        border-radius: 14px;
-        background: #fff;
+      .search-results-status {
+        border: 1px solid #dbeafe;
+        border-radius: 16px;
+        background: #eff6ff;
+        color: #1e3a8a;
+        padding: 12px 14px;
+        font-size: 13px;
+        line-height: 1.5;
+        display: none;
+      }
+
+      .search-results-status.is-visible {
+        display: block;
+      }
+
+      .selected-results-bar {
+        display: none;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        background: var(--surface);
+        padding: 10px 12px;
+        box-shadow: var(--shadow-xs);
+      }
+
+      .selected-results-bar.is-visible {
+        display: flex;
+      }
+
+      .selected-results-count {
+        color: var(--text-muted);
+        font-size: 12px;
+        font-weight: 800;
+      }
+
+      .search-panel-controls {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .search-panel-controls-label {
+        font-size: 12px;
+        color: var(--text-muted);
+        font-weight: 800;
+      }
+
+      .search-panel-count-select {
+        flex: 0 0 110px;
+      }
+
+      .create-group-btn {
+        border-radius: 12px;
+        background: #0f172a;
+        border-color: #0f172a;
+        color: #fff;
+        padding: 8px 10px;
+        font-size: 12px;
+        font-weight: 800;
+      }
+
+      .side-results-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+        gap: 14px;
+        padding-bottom: 24px;
+      }
+
+      .side-result-card {
+        position: relative;
+        border: 1px solid var(--border);
+        border-radius: 18px;
+        background: var(--surface);
         overflow: hidden;
+        cursor: pointer;
+        box-shadow: var(--shadow-xs);
+        transition: transform 0.2s var(--ease), box-shadow 0.2s var(--ease), border-color 0.2s var(--ease);
+      }
+
+      .side-result-card:hover,
+      .side-result-card.is-selected {
+        transform: translateY(-2px);
+        border-color: rgba(37, 99, 235, 0.38);
+        box-shadow: var(--shadow-sm);
+      }
+
+      .side-result-card.is-selected::after {
+        content: "✓";
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        width: 26px;
+        height: 26px;
+        border-radius: 999px;
+        display: grid;
+        place-items: center;
+        background: #2563eb;
+        color: #fff;
+        font-size: 13px;
+        font-weight: 900;
+        box-shadow: 0 8px 20px rgba(37, 99, 235, 0.28);
+        z-index: 3;
+      }
+
+      .side-result-thumb {
+        width: 100%;
+        aspect-ratio: 9 / 14;
+        background: #111827;
+        overflow: hidden;
+        position: relative;
+      }
+
+      .side-result-thumb img,
+      .side-result-thumb iframe {
+        width: 100%;
+        height: 100%;
+        display: block;
+        border: 0;
+        object-fit: cover;
+      }
+
+      .side-result-thumb .ig-embed-wrap {
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: #111;
+        pointer-events: none;
+      }
+
+      .side-result-thumb .ig-embed {
+        width: 115%;
+        height: 115%;
+        transform: scale(0.87);
+        transform-origin: 0 0;
+        pointer-events: none;
+      }
+
+      .side-result-meta {
+        padding: 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+
+      .side-result-title {
+        font-size: 12px;
+        line-height: 1.35;
+        font-weight: 800;
+        color: var(--text);
+        overflow: hidden;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+      }
+
+      .side-result-subtitle {
+        font-size: 11px;
+        color: var(--text-muted);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .side-result-actions {
+        display: flex;
+        gap: 8px;
+        padding: 0 10px 10px;
+      }
+
+      .side-result-actions .icon-btn {
+        width: 100%;
+        height: 30px;
+        border-radius: 10px;
+        font-size: 11px;
+        font-weight: 800;
+      }
+
+      .side-results-empty {
+        grid-column: 1 / -1;
+      }
+
+      .group-modal-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(15, 23, 42, 0.34);
+        backdrop-filter: blur(8px);
+        display: none;
+        align-items: center;
+        justify-content: center;
+        z-index: 5000;
+        padding: 24px;
+      }
+
+      .group-modal-overlay.is-visible {
+        display: flex;
+      }
+
+      .group-modal {
+        width: min(460px, 100%);
+        border: 1px solid var(--border);
+        border-radius: 24px;
+        background: rgba(255,255,255,0.98);
+        box-shadow: var(--shadow-lg);
+        overflow: hidden;
+      }
+
+      .group-modal-header {
+        padding: 18px 20px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .group-modal-header h2 {
+        margin: 0;
+        font-size: 18px;
+        letter-spacing: -0.03em;
+      }
+
+      .group-modal-header p {
+        margin: 6px 0 0;
+        color: var(--text-muted);
+        font-size: 13px;
+        line-height: 1.45;
+      }
+
+      .group-modal-body {
+        padding: 18px 20px 20px;
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+      }
+
+      .group-modal-label {
+        font-size: 11px;
+        font-weight: 900;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--text-muted);
+      }
+
+      .color-options {
+        display: grid;
+        grid-template-columns: repeat(5, 1fr);
+        gap: 8px;
+      }
+
+      .color-option {
+        height: 38px;
+        border-radius: 14px;
+        border: 2px solid transparent;
+        cursor: pointer;
+      }
+
+      .color-option.is-selected {
+        border-color: #0f172a;
+        box-shadow: 0 0 0 3px rgba(15, 23, 42, 0.10);
+      }
+
+      .group-modal-actions {
+        display: flex;
+        gap: 10px;
+        padding-top: 4px;
+      }
+
+      .group-modal-actions button {
+        flex: 1;
+      }
+
+      .analysis-card {
+        border: 1px solid var(--border);
+        border-radius: var(--radius-xl);
+        background: var(--surface);
+        overflow: hidden;
+        transition: transform 0.22s var(--ease), box-shadow 0.22s var(--ease), border-color 0.22s var(--ease);
+        box-shadow: var(--shadow-md);
+      }
+
+      .analysis-card:hover {
+        transform: translateY(-2px);
+        box-shadow: var(--shadow-lg);
       }
 
       .analysis-preview {
@@ -256,10 +929,18 @@
       }
 
       .analysis-field {
-        border: 1px solid #ececf4;
-        border-radius: 12px;
-        padding: 12px;
-        background: #fff;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-lg);
+        padding: 13px;
+        background: var(--surface);
+        box-shadow: var(--shadow-xs);
+        transition: transform 0.18s var(--ease), border-color 0.18s var(--ease), box-shadow 0.18s var(--ease);
+      }
+
+      .analysis-field:hover {
+        transform: translateY(-1px);
+        border-color: rgba(37, 99, 235, 0.24);
+        box-shadow: var(--shadow-sm);
       }
 
       .analysis-label {
@@ -268,7 +949,7 @@
         font-weight: 700;
         letter-spacing: 0.04em;
         text-transform: uppercase;
-        color: #b4235a;
+        color: var(--primary);
         margin-bottom: 6px;
       }
 
@@ -292,19 +973,20 @@
       }
 
       .tile.is-selected .tile-thumb {
-        outline: 3px solid rgba(180, 35, 90, 0.28);
-        outline-offset: 2px;
+        outline: 3px solid rgba(37, 99, 235, 0.30);
+        outline-offset: 3px;
+        box-shadow: 0 24px 70px rgba(37, 99, 235, 0.28);
       }
 
       @media (max-width: 1100px) {
         .workspace {
-          grid-template-columns: minmax(0, 1fr) 320px;
+          grid-template-columns: minmax(0, 1fr) 340px;
         }
 
         .analysis-panel {
-          width: 320px;
-          min-width: 320px;
-          max-width: 320px;
+          width: 340px;
+          min-width: 340px;
+          max-width: 340px;
         }
       }
 
@@ -313,6 +995,29 @@
           overflow: auto;
           height: auto;
           min-height: 100vh;
+        }
+
+        .app-shell {
+          display: flex;
+          flex-direction: column;
+          height: auto;
+          grid-template-columns: none;
+        }
+
+        .left-rail {
+          display: none;
+        }
+
+        .app-main {
+          min-height: 100vh;
+        }
+
+        header {
+          flex-wrap: wrap;
+        }
+
+        .toolbar-actions {
+          margin-left: 0;
         }
 
         main {
@@ -329,12 +1034,11 @@
           min-height: 70vh;
         }
 
-        .analysis-panel {
-          width: 100%;
-          min-width: 0;
-          max-width: none;
+        .side-panel {
+          height: auto;
+          min-height: 70vh;
           border-left: 0;
-          border-top: 1px solid #e6e6ef;
+          border-top: 1px solid var(--border);
         }
       }
 
@@ -346,7 +1050,7 @@
         min-width: 0;
         height: 100%;
         overflow: hidden;
-        background: #f7f8fc;
+        background: var(--bg);
         user-select: none;
         cursor: grab;
       }
@@ -356,56 +1060,123 @@
         position: absolute;
         inset: 0;
         transform-origin: 0 0;
-        /* faint dot grid like poppy */
-        background-color: #f7f8fc;
-        background-image: radial-gradient(rgba(17, 17, 17, 0.10) 1px, transparent 1px);
-        background-size: 22px 22px;
-        background-position: 0 0;
+        background-color: var(--bg);
+        background-image:
+          radial-gradient(rgba(15, 23, 42, 0.08) 1px, transparent 1px),
+          radial-gradient(rgba(37, 99, 235, 0.055) 1px, transparent 1px);
+        background-size: 24px 24px, 120px 120px;
+        background-position: 0 0, 0 0;
       }
 
       /* Resize handles */
+     /* Resize handles */
       .resize-handle {
         position: absolute;
-        width: 10px;
-        height: 10px;
-        background: rgba(180, 35, 90, 0.15);
-        border: 1px solid rgba(180, 35, 90, 0.35);
-        border-radius: 3px;
-        z-index: 10;
+        background: transparent;
+        border: 0;
+        z-index: 50;
       }
+
       .resize-handle:hover {
-        background: rgba(180, 35, 90, 0.25);
+        background: rgba(37, 99, 235, 0.08);
       }
-      .rh-nw { top: -5px; left: -5px; cursor: nwse-resize; }
-      .rh-ne { top: -5px; right: -5px; cursor: nesw-resize; }
-      .rh-sw { bottom: -5px; left: -5px; cursor: nesw-resize; }
-      .rh-se { bottom: -5px; right: -5px; cursor: nwse-resize; }
-      .rh-n  { top: -5px; left: 50%; transform: translateX(-50%); cursor: ns-resize; }
-      .rh-s  { bottom: -5px; left: 50%; transform: translateX(-50%); cursor: ns-resize; }
-      .rh-w  { left: -5px; top: 50%; transform: translateY(-50%); cursor: ew-resize; }
-      .rh-e  { right: -5px; top: 50%; transform: translateY(-50%); cursor: ew-resize; }
+
+      /* Corners */
+      .rh-nw {
+        top: 0;
+        left: 0;
+        width: 18px;
+        height: 18px;
+        cursor: nwse-resize;
+      }
+
+      .rh-ne {
+        top: 0;
+        right: 0;
+        width: 18px;
+        height: 18px;
+        cursor: nesw-resize;
+      }
+
+      .rh-sw {
+        bottom: 0;
+        left: 0;
+        width: 18px;
+        height: 18px;
+        cursor: nesw-resize;
+      }
+
+      .rh-se {
+        bottom: 0;
+        right: 0;
+        width: 18px;
+        height: 18px;
+        cursor: nwse-resize;
+      }
+
+      /* Edges */
+      .rh-n {
+        top: 0;
+        left: 18px;
+        right: 18px;
+        height: 12px;
+        width: auto;
+        cursor: ns-resize;
+      }
+
+      .rh-s {
+        bottom: 0;
+        left: 18px;
+        right: 18px;
+        height: 12px;
+        width: auto;
+        cursor: ns-resize;
+      }
+
+      .rh-w {
+        top: 18px;
+        bottom: 18px;
+        left: 0;
+        width: 12px;
+        height: auto;
+        cursor: ew-resize;
+      }
+
+      .rh-e {
+        top: 18px;
+        bottom: 18px;
+        right: 0;
+        width: 12px;
+        height: auto;
+        cursor: ew-resize;
+      }
       select {
         padding: 10px 12px;
-        border: 1px solid #e6e6ef;
-        border-radius: 10px;
-        background: white;
+        border: 1px solid #d9dde7;
+        border-radius: 12px;
+        background: #ffffff;
+        color: #111827;
+        font-weight: 600;
+        font-size: 13px;
+        outline: none;
+        transition: border-color 0.18s ease, box-shadow 0.18s ease;
       }
 
       /* --- Saved-card grid (Figma-style tiles) --- */
       .group-box-body {
-        padding: 14px;
+        padding: 16px;
         display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+        grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
         gap: 14px;
         align-items: start;
       }
 
       .group-empty {
         grid-column: 1 / -1;
-        border: 1px dashed #f3b6cd;
+        border: 1px dashed #cbd5e1;
         border-radius: 16px;
-        background: #fff7fb;
-        color: #9c2c58;
+        background: #ffffff;
+        color: #64748b;
         padding: 14px 16px;
         font-size: 13px;
         line-height: 1.5;
@@ -413,10 +1184,10 @@
 
       .group-status {
         grid-column: 1 / -1;
-        border: 1px solid #e7e4f6;
-        border-radius: 14px;
-        background: #f8f7fe;
-        color: #4d4a73;
+        border: 1px solid #dbeafe;
+        border-radius: 16px;
+        background: #eff6ff;
+        color: #1e3a8a;
         padding: 12px 14px;
         font-size: 13px;
         line-height: 1.5;
@@ -429,6 +1200,12 @@
         background: transparent;
         cursor: pointer;
         border: none;
+        animation: tileIn 0.28s var(--ease) both;
+      }
+
+      @keyframes tileIn {
+        from { opacity: 0; transform: translateY(10px) scale(0.98); }
+        to { opacity: 1; transform: translateY(0) scale(1); }
       }
 
       .tile-top {
@@ -445,22 +1222,25 @@
         gap: 6px;
         padding: 6px 10px;
         border-radius: 999px;
-        border: 1px solid #f1c4d6;
-        background: #fff6fa;
-        color: #b4235a;
+        border: 1px solid var(--border);
+        background: rgba(255,255,255,0.92);
+        color: var(--text-muted);
         font-size: 12px;
+        font-weight: 700;
         line-height: 1;
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
         max-width: 100%;
+        box-shadow: var(--shadow-xs);
+        backdrop-filter: blur(10px);
       }
 
       .tile-pill .ig-dot {
-        width: 10px;
-        height: 10px;
-        border-radius: 3px;
-        background: #ff4da6;
+        width: 8px;
+        height: 8px;
+        border-radius: 999px;
+        background: #2563eb;
         flex: 0 0 auto;
       }
 
@@ -472,32 +1252,92 @@
       }
 
       .icon-btn {
-        width: 26px;
-        height: 26px;
-        border-radius: 8px;
-        border: 1px solid #f1c4d6;
-        background: #fff;
+        width: 28px;
+        height: 28px;
+        border-radius: 10px;
+        border: 1px solid #e5e7eb;
+        background: #ffffff;
         cursor: pointer;
         display: inline-flex;
         align-items: center;
         justify-content: center;
         padding: 0;
-        color: #b4235a;
+        color: #64748b;
+        box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
       }
 
       .icon-btn:hover {
-        background: #fff6fa;
+        background: #f8fafc;
+        color: #2563eb;
       }
 
       .tile-thumb {
         width: 100%;
-        aspect-ratio: 9 / 16;
-        border-radius: 16px;
+        aspect-ratio: 9 / 13;
+        border-radius: var(--radius-xl);
         overflow: hidden;
-        background: #111;
-        box-shadow: 0 10px 24px rgba(0,0,0,0.15);
-        border: 1px solid #e6e6ef;
+        background: #e5e7eb;
+        box-shadow: 0 14px 34px rgba(15, 23, 42, 0.16);
+        transition: transform 0.24s var(--ease), box-shadow 0.24s var(--ease), filter 0.24s var(--ease);
+        border: 1px solid rgba(15, 23, 42, 0.08);
         pointer-events: none;
+        position: relative;
+      }
+
+      .tile:hover .tile-thumb {
+        transform: translateY(-5px) scale(1.015);
+        box-shadow: 0 24px 62px rgba(15, 23, 42, 0.23);
+        filter: saturate(1.04) contrast(1.02);
+      }
+
+      .tile-thumb::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(to top, rgba(15,23,42,0.34), transparent 38%);
+        opacity: 0;
+        transition: opacity 0.22s var(--ease);
+        pointer-events: none;
+      }
+
+      .tile:hover .tile-thumb::after {
+        opacity: 1;
+      }
+
+      .tile-badges {
+        position: absolute;
+        left: 10px;
+        right: 10px;
+        bottom: 10px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        opacity: 0;
+        transform: translateY(6px);
+        transition: opacity 0.22s var(--ease), transform 0.22s var(--ease);
+        pointer-events: none;
+        z-index: 2;
+      }
+
+      .tile:hover .tile-badges,
+      .tile.is-selected .tile-badges {
+        opacity: 1;
+        transform: translateY(0);
+      }
+
+      .tile-badge {
+        border-radius: 999px;
+        padding: 5px 8px;
+        background: rgba(255,255,255,0.92);
+        color: var(--text);
+        font-size: 11px;
+        font-weight: 800;
+        box-shadow: var(--shadow-xs);
+        backdrop-filter: blur(10px);
+      }
+
+      .tile-badge.ai {
+        color: var(--primary);
       }
 
       .tile-thumb img {
@@ -562,106 +1402,261 @@
 
       /* Slightly wider boxes so the grid feels like your reference */
       .group-box {
-        width: 520px !important;
+        min-width: 320px;
+        min-height: 220px;
       }
 
       @media (max-width: 980px) {
-        .group-box { width: 92vw !important; }
+        .group-box { width: 92vw; }
         .group-box-body { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
+      }
+
+      .ai-chat-send-btn:hover {
+        background: #2563eb;
+        color: #fff;
+      }
+
+      .ai-chat-send-btn.loading {
+        background: #2563eb;
+        color: #fff;
+        opacity: 0.8;
+      }
+
+      #generateBtn,
+      #saveBtn {
+        background: #0f172a;
+        color: #ffffff;
+        border-color: #0f172a;
+      }
+
+      #generateBtn:hover,
+      #saveBtn:hover {
+        background: #111827;
+        border-color: #111827;
       }
 
     </style>
     <link rel="icon" href="data:,">
   </head>
   <body>
-    <header>
-  <strong>Content Style Board</strong>
+    <div class="app-shell">
+      <nav class="left-rail" aria-label="Primary navigation">
+        <div class="rail-logo">CS</div>
+        <div class="rail-divider"></div>
+        <button class="rail-btn is-active" type="button" title="Search Board" data-panel="search">⌕</button>
+        <button class="rail-btn" type="button" title="AI Idea Generator" data-panel="generator">✦</button>
+        <button class="rail-btn" type="button" title="Post Analysis" data-panel="analysis">◫</button>
+        <button class="rail-btn" type="button" title="AI Chat" data-panel="chat">💬</button>
+        <button class="rail-btn" type="button" title="Saved Board" data-panel="saved">□</button>
+        <div class="rail-spacer"></div>
+        <button class="rail-btn" type="button" title="Settings" data-panel="settings">⚙</button>
+      </nav>
 
-  <input
-    id="nicheInput"
-    type="text"
-    placeholder="Niche (e.g. fitness, real estate, amazon wholesale)"
-  />
+      <div class="app-main">
+        <header>
+          <div class="topbar-title">
+            <span class="topbar-kicker">Research Board</span>
+            <strong>Content Style Board</strong>
+          </div>
 
-  <input
-    id="seedInput"
-    type="text"
-    placeholder="Seed account (optional, e.g. @creator)"
-  />
+          <div class="topbar-center">
+            <div class="workspace-pill">Infinite Content Research Workspace</div>
+          </div>
 
-  <select id="platformSelect">
-    <option value="instagram">Instagram</option>
-    <option value="tiktok">TikTok</option>
-    <option value="x">X</option>
-  </select>
-
-  <select id="styleSelect"></select>
-
-  <button id="searchBtn">Search</button>
-  <button id="classifyBtn">Classify Reels</button>
-  <button id="saveBtn">Save</button>
-    </header>
+          <div class="toolbar-actions">
+            <button id="searchBtn">Search</button>
+            <button id="classifyBtn">Classify</button>
+            <button id="saveBtn">Save</button>
+          </div>
+        </header>
     <!-- Main workspace: board on the left, analysis panel pinned on the right -->
-
     <main>
       <div class="workspace">
         <div id="board" class="board">
           <div id="canvas" class="canvas">Board loading…</div>
         </div>
-
-        <aside id="analysisPanel" class="analysis-panel">
-          <div class="analysis-panel-header">
-            <h2>Post Analysis</h2>
-            <p>Select a post card to view its saved analysis.</p>
-          </div>
-          <div id="analysisPanelBody" class="analysis-panel-body">
-            <div class="analysis-empty">
-              Click any post card on the board to load its analysis.
-              <br /><br />
-              If that post has not been analyzed yet, you will see an empty state here instead.
-            </div>
-          </div>
-          <!-- AI IDEA GENERATOR -->
-          <div class="analysis-panel-section">
-            <h2>AI Idea Generator</h2>
-            <p>Generate similar content from selected post</p>
-          </div>
-
-          <div class="ai-generator-body">
-            <textarea
-              id="aiInput"
-              placeholder="Describe what you want (or use selected post)..."
-              style="width:100%; min-height:80px; padding:10px; border-radius:10px; border:1px solid #e6e6ef;"
-            ></textarea>
-
-            <button id="generateBtn">Generate Ideas</button>
-
-            <div
-              id="aiOutput"
-              style="white-space:pre-wrap; font-size:13px; line-height:1.5; color:#111; background:#fafafe; padding:10px; border-radius:10px; border:1px solid #e6e6ef;"
-            >
-              Your AI ideas will show here...
-            </div>
-            <div class="ai-chat-box">
-              <div class="ai-chat-title">AI Chat</div>
-              <div class="ai-chat-subtitle">Ask follow-up questions about the selected post.</div>
-              <div id="aiChatMessages" class="ai-chat-messages"></div>
-              <textarea id="aiChatInput" class="ai-chat-input" placeholder="Ask AI what to do with the selected post..."></textarea>
-              <button id="aiChatSendBtn" class="ai-chat-send-btn">Send</button>
-            </div>
-          </div>
-        </aside>
       </div>
     </main>
+      </div>
+
+      <aside id="sidePanel" class="side-panel">
+        <div class="side-panel-top">
+          <div>
+            <div id="sidePanelEyebrow" class="side-panel-eyebrow">Workspace</div>
+            <div id="sidePanelTitle" class="side-panel-title">Search Board</div>
+          </div>
+          <button id="sidePanelClose" class="panel-close-btn" type="button" title="Collapse panel">×</button>
+        </div>
+
+        <div class="side-panel-body">
+          <section id="searchPanel" class="panel-view is-active" data-title="Search Board" data-eyebrow="Workspace">
+
+            <div class="panel-view-inner">
+              <div class="analysis-panel-section">
+                <h2>Search Content</h2>
+                <p>Search Instagram, TikTok, or X content and organize it visually on your board.</p>
+              </div>
+
+              <input id="nicheInput" type="text" placeholder="Enter niche, e.g. fitness, business, mindset" />
+
+              <input id="seedInput" type="text" placeholder="Seed creator or account (optional)" />
+
+              <select id="platformSelect">
+                <option value="instagram">Instagram</option>
+                <option value="tiktok">TikTok</option>
+                <option value="x">X</option>
+              </select>
+
+              <select id="styleSelect"></select>
+
+              <div class="search-panel-controls">
+                <div class="search-panel-controls-label">Posts</div>
+                <select id="resultCountSelect" class="search-panel-count-select">
+                  <option value="10">10</option>
+                  <option value="20" selected>20</option>
+                  <option value="30">30</option>
+                  <option value="50">50</option>
+                </select>
+              </div>
+
+              <button id="panelSearchBtn" class="primary-btn" type="button">
+                Search Content
+              </button>
+
+              <div id="searchResultsStatus" class="search-results-status"></div>
+
+              <div id="selectedResultsBar" class="selected-results-bar">
+                <div id="selectedResultsCount" class="selected-results-count">0 selected</div>
+                <button id="openCreateGroupBtn" class="create-group-btn" type="button">Create Group</button>
+              </div>
+
+              <div id="searchResultsGrid" class="side-results-grid">
+                <div class="analysis-empty side-results-empty">
+                  Search results will appear here as cards. Select posts you like, then create a group on the board.
+                </div>
+              </div>
+            </div>
+
+          </section>
+
+          <section id="generatorPanel" class="panel-view" data-title="AI Idea Generator" data-eyebrow="Create">
+            <div class="panel-view-inner">
+              <textarea id="aiInput" class="ai-input" placeholder="Describe what you want or use a selected post"></textarea>
+
+              <div class="prompt-grid">
+                <button class="glass-btn prompt-chip" type="button" data-prompt="Give me 10 hook ideas based on the selected post.">10 Hook Ideas</button>
+                <button class="glass-btn prompt-chip" type="button" data-prompt="Turn the selected post into a new idea for my niche.">Remix Selected Post</button>
+                <button class="glass-btn prompt-chip" type="button" data-prompt="Give me 5 carousel angles based on this idea.">Carousel Angles</button>
+                <button class="glass-btn prompt-chip" type="button" data-prompt="Give me 5 talking-head Reel scripts based on this idea.">Reel Scripts</button>
+              </div>
+
+              <button id="generateBtn" class="primary-btn" type="button">Generate Ideas</button>
+              <div id="aiOutput" class="ai-output">Generated hooks, angles, and post ideas will show up here.</div>
+            </div>
+          </section>
+
+          <section id="analysisPanel" class="panel-view" data-title="Post Analysis" data-eyebrow="Inspect">
+            <div class="analysis-panel-header">
+              <h2>Post Analysis</h2>
+              <p>Select a post card to view its saved analysis.</p>
+            </div>
+            <div id="analysisPanelBody" class="analysis-panel-body">
+              <div class="analysis-empty">
+                Select a post to inspect its breakdown.
+              </div>
+            </div>
+          </section>
+
+          <section id="chatPanel" class="panel-view" data-title="AI Chat" data-eyebrow="Assistant">
+            <div class="panel-view-inner">
+              <div class="ai-chat-title">AI Style Chat</div>
+              <div class="ai-chat-subtitle">Ask about the selected post, your niche, hooks, angles, or how to recreate a format.</div>
+
+              <div class="quick-grid">
+                <button class="glass-btn quick-action-btn" type="button" data-chat-prompt="Break down why this selected post works.">Break down post</button>
+                <button class="glass-btn quick-action-btn" type="button" data-chat-prompt="Give me a swipeable version of this idea for my niche.">Swipe this idea</button>
+                <button class="glass-btn quick-action-btn" type="button" data-chat-prompt="What pattern should I save from this post?">Find pattern</button>
+                <button class="glass-btn quick-action-btn" type="button" data-chat-prompt="Turn this into a better hook and content angle.">Improve angle</button>
+              </div>
+
+              <div id="aiChatMessages" class="ai-chat-messages"></div>
+              <textarea id="aiChatInput" class="ai-chat-input" placeholder="Ask the AI about the selected post or your content board..."></textarea>
+              <button id="aiChatSendBtn" class="ai-chat-send-btn" type="button">Send</button>
+            </div>
+          </section>
+
+          <section id="savedPanel" class="panel-view" data-title="Saved Board" data-eyebrow="Library">
+            <div class="panel-view-inner">
+              <div class="analysis-empty">
+                Saved boards, collections, and reusable style patterns will live here.
+              </div>
+            </div>
+          </section>
+
+          <section id="settingsPanel" class="panel-view" data-title="Settings" data-eyebrow="App">
+            <div class="panel-view-inner">
+              <div class="analysis-empty">
+                App settings and integrations will live here.
+              </div>
+            </div>
+          </section>
+        </div>
+      </aside>
+    </div>
+      <div id="groupModalOverlay" class="group-modal-overlay" aria-hidden="true">
+        <div class="group-modal" role="dialog" aria-modal="true" aria-labelledby="groupModalTitle">
+          <div class="group-modal-header">
+            <h2 id="groupModalTitle">Create Group</h2>
+            <p>Name this group and choose how it should look on your board.</p>
+          </div>
+
+          <div class="group-modal-body">
+            <label class="group-modal-label" for="groupNameInput">Group name</label>
+            <input id="groupNameInput" type="text" placeholder="Example: Amazon carousel hooks" />
+
+            <div class="group-modal-label">Group color</div>
+            <div class="color-options" id="groupColorOptions">
+              <button class="color-option is-selected" type="button" data-color="white" style="background:#ffffff;"></button>
+              <button class="color-option" type="button" data-color="blue" style="background:#eff6ff;"></button>
+              <button class="color-option" type="button" data-color="pink" style="background:#fff7fb;"></button>
+              <button class="color-option" type="button" data-color="green" style="background:#f0fdf4;"></button>
+              <button class="color-option" type="button" data-color="yellow" style="background:#fffbeb;"></button>
+            </div>
+
+            <div class="group-modal-actions">
+              <button id="cancelCreateGroupBtn" type="button">Cancel</button>
+              <button id="saveCreateGroupBtn" class="primary-btn" type="button">Save Group</button>
+            </div>
+          </div>
+        </div>
+      </div>
     <script>
   const boardEl = document.getElementById("board");
   const canvasEl = document.getElementById("canvas");
-  const searchBtn = document.getElementById("searchBtn");
+  const topbarSearchBtn = document.getElementById("searchBtn");
+  const searchBTtn = document.getElementById("panelSearchBtn");
   const nicheInput = document.getElementById("nicheInput");
   const seedInput = document.getElementById("seedInput");
+  const resultCountSelect = document.getElementById("resultCountSelect");
   const analysisPanelBody = document.getElementById("analysisPanelBody");
   const analysisPanel = document.getElementById("analysisPanel");
+  const searchResultsStatus = document.getElementById("searchResultsStatus");
+  const searchResultsGrid = document.getElementById("searchResultsGrid");
+  const selectedResultsBar = document.getElementById("selectedResultsBar");
+  const selectedResultsCount = document.getElementById("selectedResultsCount");
+  const openCreateGroupBtn = document.getElementById("openCreateGroupBtn");
+  const groupModalOverlay = document.getElementById("groupModalOverlay");
+  const groupNameInput = document.getElementById("groupNameInput");
+  const groupColorOptions = document.getElementById("groupColorOptions");
+  const cancelCreateGroupBtn = document.getElementById("cancelCreateGroupBtn");
+  const saveCreateGroupBtn = document.getElementById("saveCreateGroupBtn");
   const headerEl = document.querySelector("header");
+  const sidePanel = document.getElementById("sidePanel");
+  const sidePanelTitle = document.getElementById("sidePanelTitle");
+  const sidePanelEyebrow = document.getElementById("sidePanelEyebrow");
+  const sidePanelClose = document.getElementById("sidePanelClose");
+  const panelViews = Array.from(document.querySelectorAll(".panel-view"));
+  const railButtons = Array.from(document.querySelectorAll(".rail-btn[data-panel]"));
 
   window.addEventListener("load", () => {
     console.log("UI boot", {
@@ -696,6 +1691,8 @@
   let nextX = 24;
   let nextY = 24;
   let selectedTile = null;
+  const selectedSearchItems = new Map();
+  let selectedGroupColor = "white";
 
   // --- Infinite canvas (pan + zoom) ---
   let viewportX = 0;
@@ -954,7 +1951,7 @@ populateStylesForPlatform(platformSelect.value);
 platformSelect.addEventListener("change", () => {
   populateStylesForPlatform(platformSelect.value);
 });
-
+  
 
   function createGroupBox(query, results, id, emptyMessage = "", statusText = "") {
     const box = document.createElement("div");
@@ -964,11 +1961,11 @@ platformSelect.addEventListener("change", () => {
     box.style.position = "absolute";
     box.style.left = `${nextX}px`;
     box.style.top = `${nextY}px`;
-    box.style.width = "360px";
-    box.style.background = "white";
-    box.style.border = "1px solid #e6e6ef";
-    box.style.borderRadius = "14px";
-    box.style.boxShadow = "0 12px 30px rgba(0,0,0,0.10)";
+    box.style.width = "760px";
+    box.style.background = "rgba(255, 255, 255, 0.96)";
+    box.style.border = "1px solid var(--border)";
+    box.style.borderRadius = "22px";
+    box.style.boxShadow = "var(--shadow-md)";
     box.style.overflow = "hidden";
     box.className = "group-box";
 
@@ -978,9 +1975,9 @@ platformSelect.addEventListener("change", () => {
     if (nextY > 250) nextY = 24;
 
     const header = document.createElement("div");
-    header.style.padding = "10px 12px";
-    header.style.background = "#fafafe";
-    header.style.borderBottom = "1px solid #e6e6ef";
+    header.style.padding = "12px 14px";
+    header.style.background = "#ffffff";
+    header.style.borderBottom = "1px solid #e5e7eb";
     header.style.display = "flex";
     header.style.justifyContent = "space-between";
     header.style.alignItems = "center";
@@ -988,7 +1985,9 @@ platformSelect.addEventListener("change", () => {
     const title = document.createElement("div");
     title.textContent = query || "Results";
     title.style.fontWeight = "700";
-    title.style.fontSize = "14px";
+    title.style.fontSize = "13px";
+    title.style.letterSpacing = "-0.01em";
+    title.style.color = "#0f172a";
 
     const headerRight = document.createElement("div");
     headerRight.style.display = "inline-flex";
@@ -998,7 +1997,7 @@ platformSelect.addEventListener("change", () => {
     const count = document.createElement("div");
     count.textContent = `${results.length}`;
     count.style.fontSize = "12px";
-    count.style.opacity = "0.7";
+    count.style.color = "#64748b";
     count.className = "count";
 
     const delBoxBtn = document.createElement("button");
@@ -1292,6 +2291,21 @@ platformSelect.addEventListener("change", () => {
         img.src = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='540' height='960'%3E%3Crect width='100%25' height='100%25' fill='%23f1f1f6'/%3E%3Ctext x='50%25' y='50%25' dominant-baseline='middle' text-anchor='middle' fill='%23888' font-family='Arial' font-size='24'%3ENo preview data%3C/text%3E%3C/svg%3E";
         wrap.appendChild(img);
       }
+      const badges = document.createElement("div");
+      badges.className = "tile-badges";
+
+      const typeBadge = document.createElement("span");
+      typeBadge.className = "tile-badge";
+      typeBadge.textContent = tag || platform || "post";
+
+      const aiBadge = document.createElement("span");
+      aiBadge.className = "tile-badge ai";
+      aiBadge.textContent = "AI ready";
+
+      badges.appendChild(typeBadge);
+      badges.appendChild(aiBadge);
+      wrap.appendChild(badges);
+
       tile.appendChild(top);
       tile.appendChild(wrap);
       body.appendChild(tile);
@@ -1305,8 +2319,10 @@ platformSelect.addEventListener("change", () => {
         selectedTile = tile;
         selectedTile.classList.add("is-selected");
         aiChatHistory = [];
+        window.currentAnalysis = {};
         if (aiChatMessages) aiChatMessages.innerHTML = "";
 
+        openSidePanel("analysis");
         await loadAnalysisForTile(tile);
       });
 
@@ -1320,8 +2336,10 @@ platformSelect.addEventListener("change", () => {
         selectedTile = tile;
         selectedTile.classList.add("is-selected");
         aiChatHistory = [];
+        window.currentAnalysis = {};
         if (aiChatMessages) aiChatMessages.innerHTML = "";
 
+        openSidePanel("analysis");
         await loadAnalysisForTile(tile);
       });
       // Click-to-edit (keeps your current behavior)
@@ -1434,9 +2452,11 @@ platformSelect.addEventListener("change", () => {
   }
 
 async function runSearch(options = {}) {
-  const { allowAutoClassify = true, loadingBox: existingLoadingBox = null } = options;
+  const { allowAutoClassify = true } = options;
   const platform = document.getElementById("platformSelect").value;
   const style = document.getElementById("styleSelect").value;
+  
+  const resultLimit = resultCountSelect ? resultCountSelect.value : "20";
 
   const niche = nicheInput.value.trim();
   const seed = seedInput.value.trim();
@@ -1446,20 +2466,10 @@ async function runSearch(options = {}) {
     return;
   }
 
-  // Create loading box immediately (this is the per-search Saved box)
-  const label = `Saved: ${platform} • ${style} • ${niche}`;
-  const loadingBox = existingLoadingBox || createGroupBox(
-    label,
-    [],
-    undefined,
-    "Preparing results…",
-    "Searching saved local results…"
-  );
-  if (!existingLoadingBox) {
-    canvasEl.appendChild(loadingBox);
-  } else {
-    setGroupBoxStatus(loadingBox, "Searching saved local results…", "Preparing results…");
-  }
+  selectedSearchItems.clear();
+  updateSelectedResultsBar();
+  setSearchResultsStatus("Searching saved local results…");
+  renderSidePanelResults([], "Searching…");
 
   try {
     const params = new URLSearchParams({
@@ -1467,6 +2477,7 @@ async function runSearch(options = {}) {
       style,
       niche,
       best: "1",
+      limit: resultLimit,
     });
 
     if (seed) params.append("seed", seed);
@@ -1477,50 +2488,304 @@ async function runSearch(options = {}) {
     const results = Array.isArray(data.results) ? data.results : [];
 
     if (!results.length && data.notice && allowAutoClassify) {
-      setGroupBoxStatus(
-        loadingBox,
-        "No classified matches yet. Running true visual classification on candidate reels…",
-        data.notice || "No saved results for this search yet."
-      );
+      setSearchResultsStatus("No classified matches yet. Running true visual classification on candidate reels…");
       const classifyData = await autoClassifySubtypeResults(platform, style, niche);
+
       if ((classifyData?.attempted || 0) > 0) {
-        setGroupBoxStatus(
-          loadingBox,
-          `Visually inspected ${classifyData.attempted} reel(s). Refreshing search results…`,
-          ""
-        );
-        return runSearch({ allowAutoClassify: false, loadingBox });
+        setSearchResultsStatus(`Visually inspected ${classifyData.attempted} reel(s). Refreshing search results…`);
+        return runSearch({ allowAutoClassify: false });
       }
+
       if (Array.isArray(classifyData?.errors) && classifyData.errors.length) {
-        setGroupBoxStatus(
-          loadingBox,
-          `True visual classification finished with ${classifyData.errors.length} issue(s).`,
-          data.notice || "No saved results for this search yet."
-        );
+        setSearchResultsStatus(`True visual classification finished with ${classifyData.errors.length} issue(s).`);
       }
     }
 
-    loadingBox.remove();
-
-    // Create a single per-search Saved box
-    let finalEmptyMessage = data.notice || "";
+    let finalEmptyMessage = data.notice || "No saved results for this search yet.";
     if (!results.length && !allowAutoClassify && ["single-clip", "multi-clip", "talking-head"].includes((style || "").trim().toLowerCase())) {
       finalEmptyMessage = `True visual classification finished, but no ${style} results were found for '${niche}'.`;
     }
 
-    const group = createGroupBox(
-      `Saved: ${data.platform} • ${data.style} • ${niche}`,
-      results,
-      undefined,
-      finalEmptyMessage
-    );
-    canvasEl.appendChild(group);
-
+    setSearchResultsStatus(results.length ? `${results.length} result(s) found for ${platform} • ${style} • ${niche}` : "No matching results found.");
+    renderSidePanelResults(results, finalEmptyMessage);
   } catch (err) {
     console.error(err);
-    loadingBox.remove();
-    alert("Search failed. Check console.");
+    setSearchResultsStatus("Search failed. Check console.");
+    renderSidePanelResults([], "Search failed. Check console.");
   }
+}
+
+function setSearchResultsStatus(message = "") {
+  if (!searchResultsStatus) return;
+  searchResultsStatus.textContent = message;
+  searchResultsStatus.classList.toggle("is-visible", Boolean(message));
+}
+
+function updateSelectedResultsBar() {
+  const count = selectedSearchItems.size;
+  if (selectedResultsCount) selectedResultsCount.textContent = `${count} selected`;
+  if (selectedResultsBar) selectedResultsBar.classList.toggle("is-visible", count > 0);
+}
+
+function renderSidePanelResults(results, emptyMessage = "No saved results for this search yet.") {
+  if (!searchResultsGrid) return;
+  searchResultsGrid.innerHTML = "";
+
+  if (!Array.isArray(results) || !results.length) {
+    const emptyEl = document.createElement("div");
+    emptyEl.className = "analysis-empty side-results-empty";
+    emptyEl.textContent = emptyMessage;
+    searchResultsGrid.appendChild(emptyEl);
+    return;
+  }
+
+  for (const item of results) {
+    searchResultsGrid.appendChild(createSideResultCard(item));
+  }
+}
+
+function createSideResultCard(item) {
+  const url = item.url || "";
+  const tag = item.tag || item.style || "";
+  const platform = (item.platform || "unknown").toLowerCase();
+  const previewMode = (item.preview_mode || "").toLowerCase().trim();
+  const backendEmbedUrl = (item.embed_url || "").trim();
+  const thumbUrl = (item.thumbnail || item.preview_url || item.previewUrl || "").trim();
+  const itemKey = item.id || url || crypto.randomUUID();
+
+  const card = document.createElement("div");
+  card.className = "side-result-card";
+  card.setAttribute("role", "button");
+  card.setAttribute("tabindex", "0");
+  card.dataset.itemKey = itemKey;
+  card.dataset.item = JSON.stringify(item);
+
+  card.dataset.url = url;
+  card.dataset.title = item.title || url;
+  card.dataset.platform = item.platform || "";
+  card.dataset.tag = tag;
+  card.dataset.description = item.description || "";
+  card.dataset.thumbnail = item.thumbnail || item.preview_url || item.previewUrl || "";
+  card.dataset.previewUrl = item.preview_url || item.previewUrl || "";
+  card.dataset.accountHandle = item.account_handle || "";
+  card.dataset.niche = item.niche || "";
+  card.dataset.postId = item.id || "";
+  card.dataset.postUrl = url;
+  card.dataset.previewMode = previewMode;
+  card.dataset.embedUrl = backendEmbedUrl;
+
+  const isInstagram = platform === "instagram" && url && url.includes("instagram.com");
+  const canonicalPostUrl = isInstagram ? canonicalInstagramPostUrlForSidePanel(url) : url;
+  card.dataset.url = canonicalPostUrl;
+  card.dataset.postUrl = canonicalPostUrl;
+
+  const derivedEmbedUrl = isInstagram ? instagramEmbedUrlForSidePanel(canonicalPostUrl) : "";
+  const embedUrl = isInstagram
+    ? instagramEmbedUrlForSidePanel(backendEmbedUrl || canonicalPostUrl)
+    : (backendEmbedUrl || derivedEmbedUrl);
+  const shouldUseEmbed = !!embedUrl && (previewMode === "embed" || isInstagram);
+
+  const thumb = document.createElement("div");
+  thumb.className = "side-result-thumb";
+
+  function renderFallbackImage() {
+    thumb.innerHTML = "";
+    if (thumbUrl) {
+      const img = document.createElement("img");
+      img.alt = (item.title || "").trim();
+      img.loading = "lazy";
+      img.src = `/api/proxy?url=${encodeURIComponent(thumbUrl)}`;
+      img.addEventListener("error", () => {
+        img.src = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='540' height='760'%3E%3Crect width='100%25' height='100%25' fill='%23f1f1f6'/%3E%3Ctext x='50%25' y='50%25' dominant-baseline='middle' text-anchor='middle' fill='%23888' font-family='Arial' font-size='22'%3EPreview unavailable%3C/text%3E%3C/svg%3E";
+      }, { once: true });
+      thumb.appendChild(img);
+    } else {
+      const img = document.createElement("img");
+      img.alt = (item.title || "").trim();
+      img.loading = "lazy";
+      img.src = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='540' height='760'%3E%3Crect width='100%25' height='100%25' fill='%23f1f1f6'/%3E%3Ctext x='50%25' y='50%25' dominant-baseline='middle' text-anchor='middle' fill='%23888' font-family='Arial' font-size='22'%3ENo preview%3C/text%3E%3C/svg%3E";
+      thumb.appendChild(img);
+    }
+  }
+
+  if (shouldUseEmbed) {
+    const embedWrap = document.createElement("div");
+    embedWrap.className = "ig-embed-wrap";
+
+    const iframe = document.createElement("iframe");
+    iframe.className = "ig-embed";
+    iframe.src = embedUrl;
+    iframe.loading = "lazy";
+    iframe.setAttribute("title", (item.title || "Instagram embed").trim());
+    iframe.setAttribute(
+      "sandbox",
+      "allow-scripts allow-same-origin allow-popups allow-forms allow-top-navigation-by-user-activation"
+    );
+    iframe.setAttribute("allow", "encrypted-media; fullscreen; picture-in-picture");
+    iframe.setAttribute("referrerpolicy", "origin-when-cross-origin");
+    iframe.setAttribute("scrolling", "no");
+
+    iframe.addEventListener("error", renderFallbackImage, { once: true });
+
+    embedWrap.appendChild(iframe);
+    thumb.appendChild(embedWrap);
+  } else {
+    renderFallbackImage();
+  }
+
+  const meta = document.createElement("div");
+  meta.className = "side-result-meta";
+
+  const title = document.createElement("div");
+  title.className = "side-result-title";
+  title.textContent = (item.title || url || "Untitled post").trim();
+
+  const subtitle = document.createElement("div");
+  subtitle.className = "side-result-subtitle";
+  subtitle.textContent = `${item.account_handle || platform || "post"}${tag ? ` • ${tag}` : ""}`;
+
+  meta.appendChild(title);
+  meta.appendChild(subtitle);
+
+  const actions = document.createElement("div");
+  actions.className = "side-result-actions";
+
+  const openBtn = document.createElement("button");
+  openBtn.type = "button";
+  openBtn.className = "icon-btn";
+  openBtn.textContent = "Open";
+  openBtn.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const targetUrl = card.dataset.postUrl || card.dataset.url || "";
+    if (targetUrl && targetUrl.startsWith("http")) {
+      window.open(targetUrl, "_blank", "noreferrer");
+    }
+  });
+
+  actions.appendChild(openBtn);
+
+  card.appendChild(thumb);
+  card.appendChild(meta);
+  card.appendChild(actions);
+
+  const toggleCard = () => {
+    if (selectedSearchItems.has(itemKey)) {
+      selectedSearchItems.delete(itemKey);
+      card.classList.remove("is-selected");
+    } else {
+      selectedSearchItems.set(itemKey, item);
+      card.classList.add("is-selected");
+    }
+    updateSelectedResultsBar();
+  };
+
+  card.addEventListener("click", toggleCard);
+  card.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    e.preventDefault();
+    toggleCard();
+  });
+
+  return card;
+}
+
+function canonicalInstagramPostUrlForSidePanel(originalUrl) {
+  try {
+    const u = new URL(originalUrl);
+    const match = u.pathname.match(/\/(p|reel|reels)\/([A-Za-z0-9_-]+)\/?/i);
+    if (!match) return originalUrl;
+
+    const kind = match[1].toLowerCase() === "reels" ? "reel" : match[1].toLowerCase();
+    const shortcode = match[2];
+    return `https://www.instagram.com/${kind}/${shortcode}/`;
+  } catch (e) {
+    return originalUrl;
+  }
+}
+
+function instagramEmbedUrlForSidePanel(originalUrl) {
+  try {
+    const canonicalUrl = canonicalInstagramPostUrlForSidePanel(originalUrl);
+    const u = new URL(canonicalUrl);
+    u.search = "";
+    u.hash = "";
+
+    if (u.pathname.includes("/embed")) {
+      return u.toString();
+    }
+
+    if (!u.pathname.endsWith("/")) u.pathname += "/";
+    return u.toString() + "embed/";
+  } catch (e) {
+    return "";
+  }
+}
+
+function openCreateGroupModal() {
+  if (!selectedSearchItems.size) {
+    alert("Select at least one post first.");
+    return;
+  }
+
+  selectedGroupColor = "white";
+  if (groupNameInput) {
+    const platform = document.getElementById("platformSelect").value;
+    const style = document.getElementById("styleSelect").value;
+    const niche = nicheInput.value.trim();
+    groupNameInput.value = `${platform} • ${style} • ${niche}`;
+    setTimeout(() => groupNameInput.focus(), 0);
+  }
+
+  if (groupColorOptions) {
+    groupColorOptions.querySelectorAll(".color-option").forEach((btn) => {
+      btn.classList.toggle("is-selected", btn.dataset.color === selectedGroupColor);
+    });
+  }
+
+  if (groupModalOverlay) {
+    groupModalOverlay.classList.add("is-visible");
+    groupModalOverlay.setAttribute("aria-hidden", "false");
+  }
+}
+
+function closeCreateGroupModal() {
+  if (groupModalOverlay) {
+    groupModalOverlay.classList.remove("is-visible");
+    groupModalOverlay.setAttribute("aria-hidden", "true");
+  }
+}
+
+function getGroupColorStyles(color) {
+  const styles = {
+    white: { background: "rgba(255, 255, 255, 0.96)", border: "1px solid var(--border)" },
+    blue: { background: "#eff6ff", border: "1px solid #bfdbfe" },
+    pink: { background: "#fff7fb", border: "1px solid #f8cfe0" },
+    green: { background: "#f0fdf4", border: "1px solid #bbf7d0" },
+    yellow: { background: "#fffbeb", border: "1px solid #fde68a" },
+  };
+  return styles[color] || styles.white;
+}
+
+function createGroupFromSelectedResults() {
+  const selectedItems = Array.from(selectedSearchItems.values());
+  if (!selectedItems.length) {
+    alert("Select at least one post first.");
+    return;
+  }
+
+  const fallbackName = `Group • ${selectedItems.length} post${selectedItems.length === 1 ? "" : "s"}`;
+  const groupName = (groupNameInput?.value || "").trim() || fallbackName;
+  const group = createGroupBox(groupName, selectedItems, undefined, "No posts in this group yet.");
+  const colorStyles = getGroupColorStyles(selectedGroupColor);
+  group.style.background = colorStyles.background;
+  group.style.border = colorStyles.border;
+  canvasEl.appendChild(group);
+
+  selectedSearchItems.clear();
+  searchResultsGrid?.querySelectorAll(".side-result-card.is-selected").forEach((card) => card.classList.remove("is-selected"));
+  updateSelectedResultsBar();
+  closeCreateGroupModal();
 }
 
 const saveBtn = document.getElementById("saveBtn");
@@ -1831,6 +3096,7 @@ async function loadAnalysisForTile(tile) {
 
   try {
     const analysis = await fetchStoredAnalysis(tile);
+    window.currentAnalysis = analysis || {};
 
     if (!analysis) {
       renderAnalysisEmpty(
@@ -1842,6 +3108,7 @@ async function loadAnalysisForTile(tile) {
     console.log("[analysis] loaded analysis", analysis);
     renderAnalysisPanel(tile, analysis);
   } catch (err) {
+    window.currentAnalysis = {};
     console.error("Failed to load post analysis:", err);
     renderAnalysisEmpty("Failed to load analysis for this post.");
   }
@@ -1937,22 +3204,55 @@ classifyBtn.addEventListener("click", async () => {
 
 // Load saved board ONCE on startup. While it loads, disable Search so we don't
 // render boxes that then get wiped by loadBoard() clearing the board.
-searchBtn.disabled = true;
-searchBtn.style.opacity = "0.6";
-searchBtn.style.cursor = "not-allowed";
+searchBTtn.disabled = true;
+searchBTtn.style.opacity = "0.6";
+searchBTtn.style.cursor = "not-allowed";
 
 const boardReady = loadBoard().finally(() => {
-  searchBtn.disabled = false;
-  searchBtn.style.opacity = "1";
-  searchBtn.style.cursor = "pointer";
+  searchBTtn.disabled = false;
+  searchBTtn.style.opacity = "1";
+  searchBTtn.style.cursor = "pointer";
 });
 
-// One click handler only
-searchBtn.addEventListener("click", async () => {
+searchBTtn.addEventListener("click", async () => {
   await boardReady;
-  canvasEl.innerHTML = "";
   runSearch();
 });
+
+if (openCreateGroupBtn) {
+  openCreateGroupBtn.addEventListener("click", openCreateGroupModal);
+}
+
+if (cancelCreateGroupBtn) {
+  cancelCreateGroupBtn.addEventListener("click", closeCreateGroupModal);
+}
+
+if (saveCreateGroupBtn) {
+  saveCreateGroupBtn.addEventListener("click", createGroupFromSelectedResults);
+}
+
+if (groupModalOverlay) {
+  groupModalOverlay.addEventListener("click", (e) => {
+    if (e.target === groupModalOverlay) closeCreateGroupModal();
+  });
+}
+
+if (groupColorOptions) {
+  groupColorOptions.querySelectorAll(".color-option").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      selectedGroupColor = btn.dataset.color || "white";
+      groupColorOptions.querySelectorAll(".color-option").forEach((option) => {
+        option.classList.toggle("is-selected", option === btn);
+      });
+    });
+  });
+}
+
+if (topbarSearchBtn) {
+  topbarSearchBtn.addEventListener("click", () => {
+    openSidePanel("search");
+  });
+}
 
 const generateBtn = document.getElementById("generateBtn");
 const aiInput = document.getElementById("aiInput");
@@ -1961,6 +3261,25 @@ const aiChatMessages = document.getElementById("aiChatMessages");
 const aiChatInput = document.getElementById("aiChatInput");
 const aiChatSendBtn = document.getElementById("aiChatSendBtn");
 let aiChatHistory = [];
+const promptChips = document.querySelectorAll(".prompt-chip");
+const quickActionButtons = document.querySelectorAll(".quick-action-btn");
+
+
+
+promptChips.forEach((chip) => {
+  chip.addEventListener("click", () => {
+    aiInput.value = chip.dataset.prompt || "";
+    aiInput.focus();
+  });
+});
+
+quickActionButtons.forEach((btn) => {
+  btn.addEventListener("click", () => {
+    aiChatInput.value = btn.dataset.chatPrompt || "";
+    aiChatInput.focus();
+    aiChatSendBtn.click();
+  });
+});
 
 generateBtn.addEventListener("click", async () => {
   let text = aiInput.value.trim();
@@ -2025,13 +3344,14 @@ generateBtn.addEventListener("click", async () => {
     // Render HOOK TILES
     const hookTiles = hooks.map(h => `
       <div style="
-        border:1px solid #ececf4;
-        padding:10px;
-        border-radius:10px;
+        border:1px solid #e5e7eb;
+        padding:12px;
+        border-radius:16px;
         background:#fff;
         display:flex;
         flex-direction:column;
         gap:8px;
+        box-shadow:0 1px 2px rgba(15,23,42,0.04);
       ">
         <div style="cursor:pointer;" onclick="navigator.clipboard.writeText(\`${h}\`)">
           ${h}
@@ -2040,9 +3360,9 @@ generateBtn.addEventListener("click", async () => {
         <button onclick="generateFullPostFromHook(\`${h.replace(/`/g, "\\`")}\`)" style="
           font-size:12px;
           padding:6px 8px;
-          border-radius:8px;
-          border:1px solid #e6e6ef;
-          background:#fafafe;
+          border-radius:12px;
+          border:1px solid #e5e7eb;
+          background:#f8fafc;
           cursor:pointer;
         ">
           Generate Full Post
@@ -2053,10 +3373,10 @@ generateBtn.addEventListener("click", async () => {
     // Render ANGLE TILES (optional)
     const angleTiles = angles.map(a => `
       <div style="
-        border:1px solid #ececf4;
-        padding:10px;
-        border-radius:10px;
-        background:#fafafe;
+        border:1px solid #e5e7eb;
+        padding:12px;
+        border-radius:16px;
+        background:#f8fafc;
       ">
         ${a}
       </div>
@@ -2119,7 +3439,7 @@ function getSelectedPostContext() {
 function appendAiChatMessage(role, content) {
   if (!aiChatMessages) return;
   const messageEl = document.createElement("div");
-  messageEl.className = `ai-chat-message ${role}`;
+  messageEl.className = `chat-bubble ${role}`;
   messageEl.textContent = content;
   aiChatMessages.appendChild(messageEl);
   aiChatMessages.scrollTop = aiChatMessages.scrollHeight;
@@ -2140,6 +3460,7 @@ if (aiChatSendBtn && aiChatInput) {
     aiChatInput.value = "";
     aiChatSendBtn.disabled = true;
     aiChatSendBtn.textContent = "Thinking...";
+    aiChatSendBtn.classList.add("loading");
 
     try {
       const res = await fetch("/api/chat", {
@@ -2149,7 +3470,10 @@ if (aiChatSendBtn && aiChatInput) {
           message,
           niche: nicheInput.value || "general",
           format: document.getElementById("styleSelect").value || "reel",
-          context: getSelectedPostContext(),
+          context: {
+            ...getSelectedPostContext(),
+            analysis: window.currentAnalysis || {},
+          },
           history: aiChatHistory.slice(-8),
         }),
       });
@@ -2166,6 +3490,7 @@ if (aiChatSendBtn && aiChatInput) {
     } finally {
       aiChatSendBtn.disabled = false;
       aiChatSendBtn.textContent = "Send";
+      aiChatSendBtn.classList.remove("loading");
     }
   });
 }
@@ -2224,7 +3549,42 @@ async function generateFullPostFromHook(hook) {
     aiOutput.textContent = "Failed to generate full post.";
   }
 }
+function openSidePanel(panelName) {
+    if (!sidePanel) return;
+
+    const target = document.getElementById(`${panelName}Panel`);
+    if (!target) return;
+
+    document.querySelector(".app-shell").style.gridTemplateColumns = "68px minmax(0, 1fr) 720px";
+    sidePanel.style.display = "flex";
+
+    panelViews.forEach((panel) => panel.classList.remove("is-active"));
+    target.classList.add("is-active");
+
+    if (sidePanelTitle) sidePanelTitle.textContent = target.dataset.title || "Panel";
+    if (sidePanelEyebrow) sidePanelEyebrow.textContent = target.dataset.eyebrow || "Workspace";
+
+    railButtons.forEach((btn) => {
+      btn.classList.toggle("is-active", btn.dataset.panel === panelName);
+    });
+  }
+
+  railButtons.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      openSidePanel(btn.dataset.panel);
+    });
+  });
+
+  if (sidePanelClose) {
+    sidePanelClose.addEventListener("click", () => {
+      document.querySelector(".app-shell").style.gridTemplateColumns = "68px minmax(0, 1fr) 0px";
+      sidePanel.style.display = "none";
+      railButtons.forEach((btn) => btn.classList.remove("is-active"));
+    });
+  }
 </script>
 
   </body>
 </html>
+
+  

@@ -1220,10 +1220,20 @@ def search_account_cap_for_style(style: str) -> int:
     return 4
 
 
-def search_posts_index(platform: str, style: str, niche: str = "", limit: int = 24) -> list:
+def search_posts_index(
+        platform: str, 
+        style: str,
+        niche: str = "",
+        limit: int = 24,
+        exclude_urls: list[str] | None = None,
+        refresh: bool = False,
+) -> list:
+    
     platform = (platform or "").lower().strip()
     style = normalize_style_alias(style)
     niche = (niche or "").strip().lower()
+    exclude_urls = [u.strip() for u in (exclude_urls or []) if isinstance(u, str) and u.strip()]
+    refresh = bool(refresh)
     is_reel_substyle = style in ("single-clip", "multi-clip", "talking-head")
 
     where = ["platform = ?"]
@@ -1249,6 +1259,11 @@ def search_posts_index(platform: str, style: str, niche: str = "", limit: int = 
         where.append("(LOWER(niche) LIKE ? OR LOWER(caption) LIKE ? OR LOWER(account_handle) LIKE ?)")
         like = f"%{niche}%"
         params.extend([like, like, like])
+    
+    if exclude_urls:
+        placeholders = ",".join(["?"] * len(exclude_urls))
+        where.append(f"post_url NOT IN ({placeholders})")
+        params.extend(exclude_urls)
 
     order_by_parts = []
 
@@ -1269,10 +1284,11 @@ def search_posts_index(platform: str, style: str, niche: str = "", limit: int = 
         params.extend([exact_niche, niche_like, niche_like, niche_like])
 
     # 2) Then recency
-    order_by_parts.append("collected_at DESC")
-
-    # 3) Then profile rank
-    order_by_parts.append("profile_rank ASC")
+    if refresh:
+        order_by_parts.append("RANDOM()")
+    else:
+        order_by_parts.append("collected_at DESC")
+        order_by_parts.append("profile_rank ASC")
 
     # 4) Then style preference
     if is_reel_substyle:
@@ -1293,7 +1309,8 @@ def search_posts_index(platform: str, style: str, niche: str = "", limit: int = 
         )
 
     # 5) Stable tiebreaker
-    order_by_parts.append("id DESC")
+    if not refresh:
+        order_by_parts.append("id DESC")
 
 
     sql = f"""
@@ -2253,12 +2270,13 @@ def chat_with_content_ai(message: str, niche: str, format_type: str, context: di
     context = context or {}
     history = history or []
 
-    original_title = context.get("original_tutle") or ""
+    original_title = context.get("original_title") or ""
     original_description = context.get("original_description") or ""
     original_url = context.get("original_url") or ""
     account_handle = context.get("account_handle") or ""
-    post_type = context.get("post_tyoe") or format_type
+    post_type = context.get("post_type") or format_type
     context_niche = context.get("niche") or niche
+    analysis = context.get("analysis") or {}
 
     compact_history = []
     for item in history[-8:]:
@@ -2268,39 +2286,52 @@ def chat_with_content_ai(message: str, niche: str, format_type: str, context: di
         content = (item.get("content") or "").strip()
         if role in ("user", "assistant") and content:
             compact_history.append({"role": role, "content": content[:1500]})
-    
+
     system_prompt = """
-You are an AI content strategist inside a visual content research board.
+You are an elite content strategist inside a visual content research board.
 
-Help the user turn selected posts into better content ideas, hooks, outlines, scripts, captions, CTAs, and rewrites.
+You do not give generic advice. Your job is to diagnose why content works, translate it into the user's niche, and give highly specific, executable outputs.
 
-Be specific, practical, and concise. Use the selected post context when available. Never copy the original post word-for-word.
+Rules:
+- Be direct, decisive, and practical.
+- Avoid vague language and filler.
+- Prioritize action over explanation.
+- Use the selected post context when available.
+- Never copy the original post word-for-word.
+- If analysis data is provided, use it to guide your response.
 
+When useful, respond with this structure:
+1. Breakdown: why the selected post or idea works
+2. Adaptation: how to apply it to the user's niche
+3. Output: hooks, angles, scripts, captions, CTAs, or a full post outline
 """.strip()
-    
+
     context_prompt = f"""
 CURRENT TARGET NICHE:
-
 {niche}
 
 CURRENT TARGET FORMAT:
-
 {format_type}
 
 SELECTED POST CONTEXT:
-
 - Original title/caption: {original_title}
-
 - Original description: {original_description}
-
 - Account handle: {account_handle}
-
 - Original post type: {post_type}
-
 - Original post niche: {context_niche}
-
 - Original URL: {original_url}
 
+SELECTED POST ANALYSIS:
+- Hook text: {analysis.get("hook_text", "") if isinstance(analysis, dict) else ""}
+- Hook type: {analysis.get("hook_type", "") if isinstance(analysis, dict) else ""}
+- Content angle: {analysis.get("content_angle", "") if isinstance(analysis, dict) else ""}
+- Creator intent: {analysis.get("creator_intent", "") if isinstance(analysis, dict) else ""}
+- CTA type: {analysis.get("cta_type", "") if isinstance(analysis, dict) else ""}
+- Voice style: {analysis.get("voice_style", "") if isinstance(analysis, dict) else ""}
+- Structure type: {analysis.get("structure_type", "") if isinstance(analysis, dict) else ""}
+- Pain point: {analysis.get("pain_point", "") if isinstance(analysis, dict) else ""}
+- Audience type: {analysis.get("audience_type", "") if isinstance(analysis, dict) else ""}
+- Rewriteable takeaway: {analysis.get("rewriteable_takeaway", "") if isinstance(analysis, dict) else ""}
 """.strip()
     
     messages = [
@@ -3593,123 +3624,129 @@ def search(
     seed: str = "",
     best: int = 1,
     debug: int = 0,
+    limit: int = 20,
+    refresh: int = 0,
+    exclude_urls: str = "",
 ):
     platform = (platform or "instagram").lower().strip()
     style = (style or "carousel").lower().strip()
     normalized_style = normalize_style_alias(style)
-    min_result_target = 10 if normalized_style in ("single-clip", "multi-clip", "talking-head", "carousel") else 8
-    indexed_results = search_posts_index(platform=platform, style=style, niche=niche, limit=max(24, min_result_target * 2))
+    requested_limit = max(1, min(int(limit or 20), 50))
+    is_refresh = bool(int(refresh or 0))
+    excluded_url_list = [u.strip() for u in (exclude_urls or "").split(",") if u.strip()]
+
+    min_result_target = requested_limit if normalized_style in ("single-clip", "multi-clip", "talking-head", "carousel") else min(requested_limit, 12)
+    indexed_results = search_posts_index(
+        platform=platform,
+        style=style,
+        niche=niche,
+        limit=max(requested_limit * 4, 48),
+        exclude_urls=excluded_url_list,
+        refresh=is_refresh,
+    )
+
     subtype_notice = ""
     bootstrap_summary = []
     classification_summary = []
 
-    if not indexed_results and normalized_style in ("single-clip", "multi-clip", "talking-head"):
-        fallback_reels = search_posts_index(platform=platform, style="reel", niche=niche, limit=24)
-        if fallback_reels:
-            subtype_notice = (
-                f"No {normalized_style} results are classified yet for '{niche}'. "
-                f"We do have {len(fallback_reels)} raw reel candidate(s), but they are not labeled confidently enough to show under this subtype."
-            )
-    print(
-        "DEBUG /api/search",
-        {
-            "platform": platform,
-            "style": style,
-            "niche": niche,
-            "count": len(indexed_results),
-            "top_urls": [r.get("url") for r in indexed_results[:5]],
-            "notice": subtype_notice,
-        }
+    niche_health = get_niche_health(
+        platform=platform,
+        style=style,
+        niche=niche,
     )
-    niche_health = get_niche_health(platform=platform, style=style, niche=niche)
-    should_bootstrap = (
+
+    should_expand = (
         platform == "instagram"
         and bool((niche or "").strip())
         and (
-            len(indexed_results) < min_result_target
+            len(indexed_results) < requested_limit
             or not niche_health.get("healthy")
             or int(niche_health.get("distinct_accounts") or 0) < 8
         )
     )
-    if should_bootstrap:
-        for attempt in range(3):
-            if len(indexed_results) >= min_result_target:
-                break
 
-            bootstrap_result = bootstrap_niche_posts_sync(
-                platform=platform,
-                style=style,
-                niche=niche,
-                discovery_limit=10 + (attempt * 6),
-                crawl_accounts=6 + (attempt * 2),
-                posts_per_account=24,
-            )
-            bootstrap_summary.append(bootstrap_result)
-
-            if normalized_style in ("single-clip", "multi-clip", "talking-head"):
-                classify_result = api_classify_reels_true_visual(
-                    platform=platform,
-                    niche=niche,
-                    style=style,
-                    limit=24,
-                    fps=1.0,
-                )
-                classification_summary.append(classify_result)
-
-            reindexed_results = search_posts_index(
-                platform=platform,
-                style=style,
-                niche=niche,
-                limit=max(24, min_result_target * 2),
-            )
-            indexed_results = reindexed_results
-            niche_health = get_niche_health(platform=platform, style=style, niche=niche)
-
-            created_posts = int(bootstrap_result.get("created_posts") or 0)
-            updated_labels = int((classification_summary[-1].get("updated") if classification_summary else 0) or 0)
-            if created_posts == 0 and updated_labels == 0:
-                break
-
-        if indexed_results:
-            subtype_notice = ""
-        elif normalized_style in ("single-clip", "multi-clip", "talking-head"):
-            fallback_reels = search_posts_index(platform=platform, style="reel", niche=niche, limit=24)
-            if fallback_reels:
-                subtype_notice = (
-                    f"No {normalized_style} results are classified yet for '{niche}'. "
-                    f"Expanded this niche and found {len(fallback_reels)} reel candidate(s), "
-                    f"but none are labeled confidently enough under this subtype yet."
-                )
-    if indexed_results and len(indexed_results) < min_result_target and niche:
-        subtype_notice = subtype_notice or (
-            f"Only found {len(indexed_results)} strong matches so far for '{niche}'. "
-            f"Search expanded the niche, but the local classified pool is still thin."
+    if should_expand:
+        bootstrap_result = bootstrap_niche_posts_sync(
+            platform=platform,
+            style=style,
+            niche=niche,
+            discovery_limit=16,
+            crawl_accounts=10,
+            posts_per_account=24,
         )
-    if indexed_results and niche_health.get("healthy"):
-        resp = {
-            "platform": platform,
-            "style": style,
-            "q": "local_index",
-            "results": dedupe_and_truncate(indexed_results, limit=max(10, min_result_target)),
-        }
-        if debug:
-            resp["debug"] = {
-                "source": "local_index",
-                "db": str(DB_FILE),
-                "count": len(indexed_results),
-                "niche_health": niche_health,
-                "bootstrap_summary": bootstrap_summary,
-                "classification_summary": classification_summary,
-            }
-        if subtype_notice:
-            resp["notice"] = subtype_notice
-        return resp
 
+        bootstrap_summary.append(bootstrap_result)
+
+        if normalized_style in ("single-clip", "multi-clip", "talking-head"):
+            classify_result = api_classify_reels_true_visual(
+                platform=platform,
+                niche=niche,
+                style=style,
+                limit=24,
+                fps=1.0,
+            )
+
+            classification_summary.append(classify_result)
+        
+        indexed_results = search_posts_index(
+            platform=platform,
+            style=style,
+            niche=niche,
+            limit=max(requested_limit * 4, 48),
+            exclude_urls=excluded_url_list,
+            refresh=is_refresh,
+        )
+
+        niche_health = get_niche_health(
+            platform=platform,
+            style=style,
+            niche=niche,
+        )
+    
+    final_results = dedupe_and_truncate(
+        indexed_results,
+        limit=requested_limit,
+    )
+
+    if len(final_results) < requested_limit:
+        subtype_notice = (
+            f"Only found {len(final_results)} results so far. "
+            f"The system is actively expanding this niche."
+        )
+    
+    resp = {
+        "platform": platform,
+        "style": style, 
+        "q": "local_index",
+        "results": final_results,
+        "requested_limit": requested_limit,
+        "returned_count": len(final_results),
+        "refresh": is_refresh,
+        "excluded_count": len(excluded_url_list),
+        "notice": subtype_notice,
+    }
+
+    if debug:
+        resp["debug"] = {
+            "source": "local_index",
+            "db": str(DB_FILE),
+            "count": len(indexed_results),
+            "niche_health": niche_health,
+            "bootstrap_summary": bootstrap_summary,
+            "classification_summary": classification_summary,
+        }
+    return resp
+
+    final_results = dedupe_and_truncate(indexed_results, limit=requested_limit) if indexed_results else []
     resp = {
         "platform": platform,
         "style": style,
         "q": "local_index_only",
-        "results": dedupe_and_truncate(indexed_results, limit=max(10, min_result_target)) if indexed_results else [],
+        "results": final_results,
+        "requested_limit": requested_limit,
+        "returned_count": len(final_results),
+        "refresh": is_refresh,
+        "excluded_count": len(excluded_url_list),
     }
 
     if debug:
