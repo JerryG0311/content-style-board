@@ -1,6 +1,6 @@
 from dotenv import load_dotenv
 import os
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from openai import OpenAI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
@@ -581,6 +581,17 @@ def url_matches_platform(url: str, platform: str, style: str = None) -> bool:
 
     return True
 
+def should_queue_search_expansion(platform, style, niche):
+    key = f"{platform}:{normalize_style_alias(style)}:{(niche or '').strip().lower()}"
+    now = time.time()
+    last = SEARCH_EXPANSION_COOLDOWNS.get(key, 0)
+
+    if last and (now - last) < SEARCH_EXPANSION_COOLDOWN_SECONDS:
+        return False
+    
+    SEARCH_EXPANSION_COOLDOWNS[key] = now
+    return True
+
 
 def dedupe_and_truncate(results: list, limit: int = 8) -> list:
     seen = set()
@@ -652,6 +663,9 @@ DATA_DIR = Path("data")
 BOARD_FILE = DATA_DIR / "board.json"
 
 DB_FILE = DATA_DIR / "app.db"
+
+SEARCH_EXPANSION_COOLDOWNS = {}
+SEARCH_EXPANSION_COOLDOWN_SECONDS = 180
 
 
 
@@ -2401,32 +2415,67 @@ def bootstrap_niche_posts_sync(
     errors = []
     created_posts = 0
 
-    for account in all_accounts[:crawl_accounts]:
-        if isinstance(account, sqlite3.Row):
-            account = dict(account)
-        elif not isinstance(account, dict):
-            account = {"handle": str(account or "")}
+    from concurrent.futures import ThreadPoolExecutor, as_completed
 
-        handle = (account.get("handle") or "").strip().lstrip("@")
-        if not handle:
-            continue
+    def process_account(account):
         try:
-            create_seed_account(platform="instagram", handle=handle, niche=niche)
+            if isinstance(account, sqlite3.Row):
+                account = dict(account)
+            elif not isinstance(account, dict):
+                account = {"handle": str(account or "")}
+            
+            handle = (account.get("handle") or "").strip().lstrip("@")
+            if not handle:
+                return {
+                    "ok": False, 
+                    "handle": "",
+                    "created": 0,
+                }
+            
+            create_seed_account(
+                platform="instagram",
+                handle=handle,
+                niche=niche,
+            )
+
             rows = collect_instagram_seed_account(
                 handle=handle,
                 niche=niche,
                 max_posts=posts_per_account,
                 keep_posts=posts_per_account,
             )
-            crawled_handles.append(handle)
-            created_posts += len(rows or [])
+
+            return {
+                "ok": True,
+                "handle": handle,
+                "created": len(rows or []),
+            }
+        
         except Exception as e:
-            errors.append(
-                {
-                    "handle": handle,
-                    "error": str(e),
-                }
-            )
+            return {
+                "ok": False,
+                "handle": handle if 'handle' in locals() else "",
+                "error": str(e),
+                "created": 0,
+            }
+    
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = [
+            executor.submit(process_account, account)
+            for account in all_accounts[:crawl_accounts]
+        ]
+
+        for future in as_completed(futures):
+            result = future.result()
+
+            if result.get("ok"):
+                crawled_handles.append(result["handle"])
+                created_posts += result["created"]
+            else:
+                errors.append({
+                    "handle": result.get("handle", ""),
+                    "error": result.get("error", "unkown error"),
+                })
 
     return {
         "ok": True,
@@ -3618,6 +3667,7 @@ def health():
 
 @app.get("/api/search")
 def search(
+    background_tasks: BackgroundTasks,
     platform: str = "instagram",
     style: str = "carousel",
     niche: str = "",
@@ -3635,7 +3685,6 @@ def search(
     is_refresh = bool(int(refresh or 0))
     excluded_url_list = [u.strip() for u in (exclude_urls or "").split(",") if u.strip()]
 
-    min_result_target = requested_limit if normalized_style in ("single-clip", "multi-clip", "talking-head", "carousel") else min(requested_limit, 12)
     indexed_results = search_posts_index(
         platform=platform,
         style=style,
@@ -3660,49 +3709,41 @@ def search(
         and bool((niche or "").strip())
         and (
             len(indexed_results) < requested_limit
+            or is_refresh
             or not niche_health.get("healthy")
             or int(niche_health.get("distinct_accounts") or 0) < 8
         )
     )
 
+    expansion_queued = False
+    expansion_skipped_reason = "not_needed"
+
     if should_expand:
-        bootstrap_result = bootstrap_niche_posts_sync(
-            platform=platform,
-            style=style,
-            niche=niche,
-            discovery_limit=16,
-            crawl_accounts=10,
-            posts_per_account=24,
-        )
-
-        bootstrap_summary.append(bootstrap_result)
-
-        if normalized_style in ("single-clip", "multi-clip", "talking-head"):
-            classify_result = api_classify_reels_true_visual(
+        if should_queue_search_expansion(platform, style, niche):
+            expansion_queued = True
+            expansion_skipped_reason = "queued"
+            background_tasks.add_task(
+                bootstrap_niche_posts_sync,
                 platform=platform,
-                niche=niche,
                 style=style,
-                limit=24,
-                fps=1.0,
+                niche=niche,
+                discovery_limit=16,
+                crawl_accounts=10,
+                posts_per_account=24,
             )
+            bootstrap_summary.append({
+                "queued": True,
+                "mode": "background",
+                "reason": "refresh" if is_refresh else "thin_results",
+            })
+        else:
+            expansion_skipped_reason = "cooldown"
+            bootstrap_summary.append({
+                "queued": False,
+                "mode": "background",
+                "reason": "cooldown",
+            })
 
-            classification_summary.append(classify_result)
-        
-        indexed_results = search_posts_index(
-            platform=platform,
-            style=style,
-            niche=niche,
-            limit=max(requested_limit * 4, 48),
-            exclude_urls=excluded_url_list,
-            refresh=is_refresh,
-        )
-
-        niche_health = get_niche_health(
-            platform=platform,
-            style=style,
-            niche=niche,
-        )
-    
     final_results = dedupe_and_truncate(
         indexed_results,
         limit=requested_limit,
@@ -3713,10 +3754,10 @@ def search(
             f"Only found {len(final_results)} results so far. "
             f"The system is actively expanding this niche."
         )
-    
+
     resp = {
         "platform": platform,
-        "style": style, 
+        "style": style,
         "q": "local_index",
         "results": final_results,
         "requested_limit": requested_limit,
@@ -3724,6 +3765,9 @@ def search(
         "refresh": is_refresh,
         "excluded_count": len(excluded_url_list),
         "notice": subtype_notice,
+        "expansion_needed": should_expand,
+        "expansion_queued": expansion_queued,
+        "expansion_skipped_reason": expansion_skipped_reason,
     }
 
     if debug:
@@ -3734,34 +3778,10 @@ def search(
             "niche_health": niche_health,
             "bootstrap_summary": bootstrap_summary,
             "classification_summary": classification_summary,
+            "expansion_needed": should_expand,
+            "expansion_queued": expansion_queued,
+            "expansion_skipped_reason": expansion_skipped_reason,
         }
-    return resp
-
-    final_results = dedupe_and_truncate(indexed_results, limit=requested_limit) if indexed_results else []
-    resp = {
-        "platform": platform,
-        "style": style,
-        "q": "local_index_only",
-        "results": final_results,
-        "requested_limit": requested_limit,
-        "returned_count": len(final_results),
-        "refresh": is_refresh,
-        "excluded_count": len(excluded_url_list),
-    }
-
-    if debug:
-        resp["debug"] = {
-            "source": "local_index_only",
-            "db": str(DB_FILE),
-            "local_index_count": len(indexed_results),
-            "niche_health": niche_health,
-            "used_local_only": True,
-            "note": "Brave search fully removed. Results are DB-only.",
-            "bootstrap_summary": bootstrap_summary,
-            "classification_summary": classification_summary,
-        }
-    if subtype_notice:
-        resp["notice"] = subtype_notice
 
     return resp
 @app.post("/api/expand/niche")

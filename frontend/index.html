@@ -1523,6 +1523,10 @@
                 Search Content
               </button>
 
+              <button id="refreshResultsBtn" class="glass-btn" type="button">
+                Refresh Results
+              </button>
+
               <div id="searchResultsStatus" class="search-results-status"></div>
 
               <div id="selectedResultsBar" class="selected-results-bar">
@@ -1645,6 +1649,7 @@
   const selectedResultsBar = document.getElementById("selectedResultsBar");
   const selectedResultsCount = document.getElementById("selectedResultsCount");
   const openCreateGroupBtn = document.getElementById("openCreateGroupBtn");
+  const refreshResultsBtn = document.getElementById("refreshResultsBtn");
   const groupModalOverlay = document.getElementById("groupModalOverlay");
   const groupNameInput = document.getElementById("groupNameInput");
   const groupColorOptions = document.getElementById("groupColorOptions");
@@ -1693,6 +1698,7 @@
   let selectedTile = null;
   const selectedSearchItems = new Map();
   let selectedGroupColor = "white";
+  let currentSearchResults = [];
 
   // --- Infinite canvas (pan + zoom) ---
   let viewportX = 0;
@@ -2452,7 +2458,7 @@ platformSelect.addEventListener("change", () => {
   }
 
 async function runSearch(options = {}) {
-  const { allowAutoClassify = true } = options;
+  const { allowAutoClassify = true, refresh = false } = options;
   const platform = document.getElementById("platformSelect").value;
   const style = document.getElementById("styleSelect").value;
   
@@ -2468,17 +2474,26 @@ async function runSearch(options = {}) {
 
   selectedSearchItems.clear();
   updateSelectedResultsBar();
-  setSearchResultsStatus("Searching saved local results…");
-  renderSidePanelResults([], "Searching…");
+  setSearchResultsStatus(refresh ? "Refreshing results and looking for new content…" : "Searching saved local results…");
+  renderSidePanelResults([], refresh ? "Refreshing…" : "Searching…");
 
   try {
+    const excludeUrls = refresh
+    ? currentSearchResults.map((item) => item.url).filter(Boolean)
+    : [];
+
     const params = new URLSearchParams({
       platform,
       style,
       niche,
       best: "1",
       limit: resultLimit,
+      refresh: refresh ? "1" : "0",
     });
+
+    if (excludeUrls.length) {
+      params.append("exclude_urls", excludeUrls.join(","));
+    }
 
     if (seed) params.append("seed", seed);
 
@@ -2506,6 +2521,7 @@ async function runSearch(options = {}) {
       finalEmptyMessage = `True visual classification finished, but no ${style} results were found for '${niche}'.`;
     }
 
+    currentSearchResults = results;
     setSearchResultsStatus(results.length ? `${results.length} result(s) found for ${platform} • ${style} • ${niche}` : "No matching results found.");
     renderSidePanelResults(results, finalEmptyMessage);
   } catch (err) {
@@ -3218,6 +3234,13 @@ searchBTtn.addEventListener("click", async () => {
   await boardReady;
   runSearch();
 });
+
+if (refreshResultsBtn) {
+  refreshResultsBtn.addEventListener("click", async () => {
+    await boardReady;
+    runSearch({ refresh: true });
+  });
+}
 
 if (openCreateGroupBtn) {
   openCreateGroupBtn.addEventListener("click", openCreateGroupModal);
