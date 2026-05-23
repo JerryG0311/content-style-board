@@ -1,6 +1,6 @@
 from dotenv import load_dotenv
 import os
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException
 from openai import OpenAI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
@@ -26,6 +26,7 @@ from .jobs import (
     create_crawl_job,
     get_crawl_job,
     publish_rabbitmq_job,
+    queue_expand_niche_job,
     update_crawl_job_status,
     get_db,
     utc_now_iso,
@@ -3667,7 +3668,6 @@ def health():
 
 @app.get("/api/search")
 def search(
-    background_tasks: BackgroundTasks,
     platform: str = "instagram",
     style: str = "carousel",
     niche: str = "",
@@ -3722,8 +3722,7 @@ def search(
         if should_queue_search_expansion(platform, style, niche):
             expansion_queued = True
             expansion_skipped_reason = "queued"
-            background_tasks.add_task(
-                bootstrap_niche_posts_sync,
+            expansion_job = queue_expand_niche_job(
                 platform=platform,
                 style=style,
                 niche=niche,
@@ -3733,7 +3732,8 @@ def search(
             )
             bootstrap_summary.append({
                 "queued": True,
-                "mode": "background",
+                "mode": "rabbitmq",
+                "job_id": expansion_job.get("id"),
                 "reason": "refresh" if is_refresh else "thin_results",
             })
         else:

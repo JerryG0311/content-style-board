@@ -5,6 +5,13 @@ import pika
 from .workers.classify_reel_video import handle_classify_reel_video_job
 from .workers.crawl_instagram_account import handle_crawl_instagram_account_job
 
+from .app import bootstrap_niche_posts_sync
+from .jobs import (
+    JOB_CLASSIFY_REEL_VIDEO,
+    JOB_CRAWL_INSTAGRAM_ACCOUNT,
+    JOB_EXPAND_NICHE,
+)
+
 RABBITMQ_URL = os.getenv(
     "RABBITMQ_URL",
     "amqp://guest:guest@localhost:5672/%2F",
@@ -27,10 +34,19 @@ def main():
 
             print(f"\nReceived job: {job_type}")
 
-            if job_type == "classify_reel_video":
+            if job_type == JOB_CLASSIFY_REEL_VIDEO:
                 handle_classify_reel_video_job(payload)
-            elif job_type == "crawl_instagram_account":
+            elif job_type == JOB_CRAWL_INSTAGRAM_ACCOUNT:
                 handle_crawl_instagram_account_job(payload)
+            elif job_type == JOB_EXPAND_NICHE:
+                bootstrap_niche_posts_sync(
+                    platform=payload.get("platform", "instagram"),
+                    style=payload.get("style", "carousel"),
+                    niche=payload.get("niche", ""),
+                    discovery_limit=int(payload.get("discovery_limit", 16)),
+                    crawl_accounts=int(payload.get("crawl_accounts", 10)),
+                    posts_per_account=int(payload.get("posts_per_account", 24)),
+                )
             else:
                 print(f"Unknown job type: {job_type}")
             

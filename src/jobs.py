@@ -27,6 +27,7 @@ def get_db():
 JOB_DISCOVER_ACCOUNTS_FOR_NICHE = "discover_accounts_for_niche"
 JOB_CRAWL_INSTAGRAM_ACCOUNT = "crawl_instagram_account"
 JOB_CLASSIFY_REEL_VIDEO = "classify_reel_video"
+JOB_EXPAND_NICHE = "expand_niche"
 
 
 def create_crawl_job(job_type: str, target: str, status: str = "queued") -> dict:
@@ -175,3 +176,50 @@ def publish_rabbitmq_job(job_type: str, target: str, payload: Optional[dict] = N
     )
 
     connection.close()
+
+
+def queue_expand_niche_job(
+    platform: str,
+    style: str,
+    niche: str,
+    discovery_limit: int = 16,
+    crawl_accounts: int = 10,
+    posts_per_account: int = 24,
+) -> dict:
+    """
+    Create and publish a background job that expands a niche content pool.
+    Search can return immediately while workers discover/crawl/classify content.
+    """
+    platform = (platform or "instagram").strip().lower()
+    style = (style or "carousel").strip().lower()
+    niche = (niche or "").strip()
+
+    if not niche:
+        raise ValueError("niche is required")
+
+    target = f"{platform}:{style}:{niche}"
+    payload = {
+        "platform": platform,
+        "style": style,
+        "niche": niche,
+        "discovery_limit": int(discovery_limit),
+        "crawl_accounts": int(crawl_accounts),
+        "posts_per_account": int(posts_per_account),
+    }
+
+    job = create_crawl_job(
+        job_type=JOB_EXPAND_NICHE,
+        target=target,
+        status="queued",
+    )
+
+    publish_rabbitmq_job(
+        job_type=JOB_EXPAND_NICHE,
+        target=target,
+        payload={
+            **payload,
+            "job_id": job.get("id"),
+        },
+    )
+
+    return job
