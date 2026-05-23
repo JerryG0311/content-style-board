@@ -133,55 +133,139 @@ def enqueue_account_crawl(platform: str, handle: str, niche: str = "") -> dict:
         "job": job, 
     }
 
+
+def get_existing_seed_accounts_for_niche(platform: str, niche: str = "", limit: int = 10) -> list[dict]:
+    """
+    Fetch existing active seed accounts for a niche so expansion can still queue
+    crawl jobs even when discovery returns no fresh accounts.
+    """
+
+    platform = (platform or "instagram").lower().strip()
+    niche = (niche or "").strip().lower()
+    limit = max(1, int(limit or 10))
+
+    where = ["platform = ?", "is_active = 1"]
+    params = [platform]
+
+    if niche:
+        where.append("LOWER(niche) LIKE ?")
+        params.append(f"%{niche}%")
+
+    sql = f"""
+        SELECT *
+        FROM seed_accounts
+        WHERE {' AND '.join(where)}
+        ORDER BY
+            CASE WHEN last_crawled_at IS NULL THEN 0 ELSE 1 END ASC,
+            last_crawled_at ASC,
+            id DESC
+        LIMIT ?
+    """
+    params.append(limit)
+
+    with get_db() as conn:
+        rows = conn.execute(sql, params).fetchall()
+
+    return [dict(row) for row in rows]
+
+
 def expand_niche_if_needed(platform: str, style: str, niche: str, limit: int = 10) -> dict:
     """
     Main niche-expansion entry point.
 
+    This is now an orchestration/dispatcher function only.
+    It does NOT scrape Instagram directly.
+
     Flow:
     1. Check whether the DB is already healthy for this niche/style.
-    2. If not, discover candidate accounts for the niche.
-    3. Insert new seed accounts.
-    4. Enqueue crawl jobs for those accounts.
+    2. Discover candidate accounts for the niche.
+    3. Mix discovered accounts with existing active seed accounts.
+    4. Insert missing seed accounts.
+    5. Enqueue smaller crawl_instagram_account jobs for workers.
     """
 
-    platform = (platform or "").lower().strip()
-    style = (style or "").lower().strip()
+    platform = (platform or "instagram").lower().strip()
+    style = (style or "carousel").lower().strip()
     niche = (niche or "").strip()
-    limit = int(limit or 10)
-    
+    limit = max(1, int(limit or 10))
+
     decision = needs_niche_expansion(platform=platform, style=style, niche=niche)
     if not decision.get("should_expand"):
         return {
             "ok": True,
-            "expanded": False, 
+            "expanded": False,
             "reason": "niche_already_healthy",
+            "niche_health": decision.get("niche_health", {}),
             "discovered_accounts": [],
+            "existing_seed_accounts": [],
+            "selected_accounts": [],
             "seed_results": [],
             "crawl_jobs": [],
         }
-    
+
     if platform != "instagram":
         return {
-            "ok": False, 
+            "ok": False,
             "expanded": False,
             "reason": f"unsupported_platform: {platform}",
             "niche_health": decision.get("niche_health", {}),
             "discovered_accounts": [],
+            "existing_seed_accounts": [],
+            "selected_accounts": [],
             "seed_results": [],
-            "crawl_jobs": [], 
+            "crawl_jobs": [],
         }
-    
-    discovered_accounts = discover_instagram_accounts_for_niche(niche=niche, limit=limit)
+
+    try:
+        discovered_accounts = discover_instagram_accounts_for_niche(niche=niche, limit=limit)
+    except Exception as exc:
+        print(f"[EXPANSION] Discovery failed for niche={niche}: {exc}")
+        discovered_accounts = []
+
+    existing_seed_accounts = get_existing_seed_accounts_for_niche(
+        platform=platform,
+        niche=niche,
+        limit=limit,
+    )
+
+    merged_accounts = []
+    seen_handles = set()
+
+    for account in list(discovered_accounts or []) + list(existing_seed_accounts or []):
+        if not isinstance(account, dict):
+            try:
+                account = dict(account)
+            except Exception:
+                account = {"handle": str(account or "")}
+
+        handle = (account.get("handle") or account.get("username") or "").strip().lstrip("@")
+        if not handle:
+            continue
+
+        handle_key = handle.lower()
+        if handle_key in seen_handles:
+            continue
+
+        seen_handles.add(handle_key)
+        merged_accounts.append({
+            **account,
+            "handle": handle,
+        })
+
+    selected_accounts = merged_accounts[:limit]
+
     seed_results = []
     crawl_jobs = []
-    for account in discovered_accounts:
+
+    for account in selected_accounts:
         handle = (account.get("handle") or "").strip().lstrip("@")
         if not handle:
             continue
+
         seed_result = create_seed_account_if_missing(
             platform="instagram",
             handle=handle,
-            niche=niche, 
+            niche=niche,
         )
         seed_results.append(seed_result)
 
@@ -191,13 +275,17 @@ def expand_niche_if_needed(platform: str, style: str, niche: str, limit: int = 1
             niche=niche,
         )
         crawl_jobs.append(crawl_result)
-    
+
     return {
-        "ok": True, 
+        "ok": True,
         "expanded": True,
-        "reason": "niche_expansion_triggered",
+        "reason": "niche_expansion_queued_crawl_jobs",
         "niche_health": decision.get("niche_health", {}),
         "discovered_accounts": discovered_accounts,
+        "existing_seed_accounts": existing_seed_accounts,
+        "selected_accounts": selected_accounts,
         "seed_results": seed_results,
         "crawl_jobs": crawl_jobs,
+        "queued_count": len([job for job in crawl_jobs if job.get("queued")]),
+        "skipped_count": len([job for job in crawl_jobs if not job.get("queued")]),
     }
