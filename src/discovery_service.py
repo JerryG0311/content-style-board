@@ -176,6 +176,59 @@ def build_instagram_discovery_headers(query: str = "") -> tuple[dict, dict]:
             cookies[cookie_name] = value
     return headers, cookies
 
+def build_niche_signal_terms(niche: str) -> list[str]:
+    niche = (niche or "").lower().strip()
+    if not niche:
+        return []
+    
+    words = [w.strip() for w in re.split(r"\s+", niche) if len(w.strip()) >= 3]
+    terms = []
+
+    def add(value: str):
+        value = (value or "").lower().strip()
+        if value and value not in terms:
+            terms.append(value)
+    
+    add(niche)
+    add(niche.replace(" ", ""))
+    add(niche.replace(" ", "_"))
+
+    for word in words:
+        add(word)
+    
+    niche_expansions = {
+        "amazon": ["fba", "seller", "sellers", "selling", "wholesale", "ecommerce", "ecom", "arbitrage", "reseller", "reselling", "sourcing", "prep", "distribution", "brand direct", "online arbitrage"],
+        "fba": ["amazon", "seller", "sellers", "selling", "wholesale", "ecommerce", "ecom", "arbitrage", "reseller", "reselling", "sourcing", "prep", "private label", "brand direct"],
+        "wholesale": ["seller", "sellers", "amazon", "fba", "distribution", "distributor", "brand direct", "sourcing", "reseller", "reselling", "ecommerce", "ecom"],
+        "ecommerce": ["ecom", "shopify", "amazon", "seller", "selling", "brand", "dtc", "store", "product", "commerce"],
+        "ecom": ["ecommerce", "shopify", "amazon", "seller", "selling", "brand", "dtc", "store", "product", "commerce"],
+        "fitness": ["training", "trainer", "workout", "strength", "conditioning", "nutrition", "coach", "gym", "bodybuilding", "fat loss"],
+        "health": ["wellness", "nutrition", "functional", "gut", "hormones", "holistic", "practitioner", "coach", "healing", "root cause"],
+        "functional": ["health", "medicine", "wellness", "gut", "hormones", "holistic", "practitioner", "root cause"],
+        "medicine": ["health", "functional", "wellness", "practitioner", "holistic", "root cause"],
+        "real estate": ["realtor", "realty", "property", "broker", "agent", "homes", "investor", "mortgage"],
+        "music": ["producer", "production", "ableton", "logic", "mixing", "mastering", "dj", "artist", "songwriter", "studio"],
+        "production": ["producer", "music", "ableton", "logic", "mixing", "mastering", "studio", "beats"],
+        "marketing": ["content", "growth", "brand", "copywriting", "ads", "funnel", "social media", "creator", "lead generation"],
+        "content": ["creator", "marketing", "social media", "brand", "growth", "reels", "short form", "copywriting"],
+        "personal brand": ["creator", "content", "authority", "audience", "social media", "thought leader", "brand"],
+    }
+
+    for key, expansions in niche_expansions.items():
+        if key in niche or any(key_part in words for key_part in key.split()):
+            for term in expansions:
+                add(term)
+    
+    return terms
+
+def negative_account_quality_terms() -> list[str]:
+    return [
+        "meme", "memes", "humor", "parody", "fan page", "fanpage",
+        "quotes", "daily quotes", "giveaway", "deals", "coupon",
+        "freebie", "casino", "betting", "forex", "crypto", "nft",
+        "gaming", "onlyfans",
+    ]
+
 def score_account_for_niche(niche: str, username: str, full_name: str, category: str = "") -> float:
     """
     Niche relevance score for disovered Instagram accounts.
@@ -216,12 +269,146 @@ def score_account_for_niche(niche: str, username: str, full_name: str, category:
     if len(username) <= 8 and matched_words <= 1:
         score -= 0.1
 
-    # For compound niches, a one-word overlap is usually too broad.
-    # Example: "amazon wholesale" should not strongly match generic @amazon.
-    if len(niche_words) >= 2 and niche not in hay and matched_words < 2:
-        score = min(score, 0.24)
+    positive_terms = build_niche_signal_terms(niche)
+    positive_hits = 0
 
-    return float(min(score, 1.0))
+    for term in positive_terms:
+        if term and term in hay:
+            positive_hits += 1
+    
+    if positive_hits >= 1:
+        score += 0.10
+    if positive_hits >= 2:
+        score += 0.15
+    if positive_hits >= 3:
+        score += 0.20
+    
+    negative_hits = 0
+    for term in negative_account_quality_terms():
+        if term and term in hay:
+            negative_hits += 1
+    
+    if negative_hits >= 1:
+        score -= 0.25
+    if negative_hits >= 2:
+        score -= 0.40
+    
+    username_parts = [p for p in re.split(r"[._-]+", username) if p]
+    looks_like_personal_brand = (
+        1 <= len(username_parts) <= 3
+        and 5 <= len(username) <= 32
+        and negative_hits == 0
+    )
+
+    if looks_like_personal_brand and matched_words == 0 and positive_hits == 0:
+        score += 0.05
+    
+    if len(niche_words) >= 2 and niche not in hay and matched_words < 2 and positive_hits < 2:
+        score = min(score, 0.24)
+    
+    return float(max(0.0, min(score, 1.0)))
+
+
+
+# ---- Discovery V2 helpers ----
+def build_niche_discovery_queries(niche: str, limit: int = 30) -> list[str]:
+    """
+    Build a broader set of Instagram topsearch queries for a niche.
+    This prevents discovery from depending on only the exact niche phrase.
+    """
+    niche = (niche or "").strip().lower()
+    limit = max(1, int(limit or 30))
+    if not niche:
+        return []
+
+    words = [w.strip() for w in re.split(r"\s+", niche) if w.strip()]
+    meaningful_words = [w for w in words if len(w) >= 3]
+
+    candidates = []
+
+    def add(value: str):
+        value = (value or "").strip().lower()
+        if value and value not in candidates:
+            candidates.append(value)
+
+    add(niche)
+    add(niche.replace(" ", ""))
+    add(niche.replace(" ", "_"))
+
+    if len(words) >= 2:
+        add(" ".join(words[:2]))
+        add("_".join(words[:2]))
+        add("".join(words[:2]))
+        add(" ".join(words[-2:]))
+        add("_".join(words[-2:]))
+        add("".join(words[-2:]))
+
+    for word in meaningful_words:
+        add(word)
+
+    # Generic modifier expansions. These are broad on purpose, but still built
+    # from the user's niche so we are not hardcoding one industry forever.
+    modifiers = [
+        "coach",
+        "creator",
+        "expert",
+        "mentor",
+        "tips",
+        "strategy",
+        "community",
+        "academy",
+        "business",
+        "consultant",
+    ]
+
+    for modifier in modifiers:
+        add(f"{niche} {modifier}")
+        add(f"{niche.replace(' ', '_')}_{modifier}")
+        add(f"{niche.replace(' ', '')}{modifier}")
+
+    if len(meaningful_words) >= 2:
+        for i in range(len(meaningful_words) - 1):
+            pair = f"{meaningful_words[i]} {meaningful_words[i + 1]}".strip()
+            add(pair)
+            add(pair.replace(" ", "_"))
+            add(pair.replace(" ", ""))
+
+    return candidates[:limit]
+
+
+def merge_and_score_discovered_accounts(niche: str, accounts: list[dict]) -> list[dict]:
+    """
+    Dedupe, score, annotate, and sort discovered account candidates.
+    """
+    deduped = dedupe_discovered_accounts(accounts)
+    scored = []
+
+    for account in deduped:
+        score = score_account_for_niche(
+            niche=niche,
+            username=account.get("handle") or "",
+            full_name=account.get("full_name") or "",
+            category=account.get("category") or "",
+        )
+        enriched = dict(account)
+        enriched["niche_score"] = score
+        scored.append(enriched)
+
+    scored.sort(
+        key=lambda a: (
+            float(a.get("niche_score") or 0.0),
+            not bool(a.get("already_seeded")),
+            not bool(a.get("near_duplicate_handle")),
+            len((a.get("full_name") or "").strip()),
+            bool(a.get("is_verified")),
+            not bool(a.get("is_private")),
+            a.get("handle") or "",
+        ),
+        reverse=True,
+    )
+
+    return scored
+
 
 def fetch_instagram_topsearch_accounts(query: str, limit: int = 10) -> list[dict]:
     """
@@ -288,81 +475,90 @@ def fetch_instagram_topsearch_accounts(query: str, limit: int = 10) -> list[dict
 
 def discover_instagram_accounts_for_niche(niche: str, limit: int = 10) -> list[dict]:
     """
-    Return candidate Instagram accounts for a niche using Instagram-native
-    discovery, not Brave.
+    Return candidate Instagram accounts for a niche using a broader Discovery V2 flow.
 
     Strategy:
-    1. Query Instagram topsearch with the full niche phrase.
-    2. Query again with smaller niche fragments derived from the niche itself.
-    3. Score each candidate for niche relevance.
-    4. Remove already-seeded accounts.
-    5. Return the best candidates.
+    1. Build many niche query variants, not just the exact phrase.
+    2. Query Instagram topsearch for each variant.
+    3. If fresh discovery is thin, expand from existing seed-account handles.
+    4. Score accounts by niche relevance.
+    5. Annotate already-seeded accounts instead of blindly hiding everything.
+    6. Return fresh accounts first, with useful fallback candidates after.
     """
     niche = (niche or "").strip()
-    limit = int(limit or 10)
+    limit = max(1, int(limit or 10))
 
     if not niche:
         return []
-    
-    queries = [niche]
-    words = [w for w in niche.split() if w.strip()]
-    if len(words) >= 2:
-        queries.append(" ".join(words[:2]))
-    if len(words) >= 3:
-        queries.append(" ".join(words[-2:]))
 
-    # Add generic niche-driven fragments without hardcoding any one industry.
-    niche_tokens = [w for w in words if len(w) >= 4]
-
-    for token in niche_tokens:
-        if token not in queries:
-            queries.append(token)
-
-    if len(niche_tokens) >= 2:
-        for i in range(len(niche_tokens) - 1):
-            pair = f"{niche_tokens[i]} {niche_tokens[i + 1]}".strip()
-            if pair and pair not in queries:
-                queries.append(pair)
+    query_limit = max(limit * 2, 30)
+    per_query_limit = max(8, min(limit, 20))
+    queries = build_niche_discovery_queries(niche=niche, limit=query_limit)
 
     raw_accounts = []
     for query in queries:
-        raw_accounts.extend(fetch_instagram_topsearch_accounts(query=query, limit=limit))
+        raw_accounts.extend(fetch_instagram_topsearch_accounts(query=query, limit=per_query_limit))
+
+    print(f"[DISCOVERY] Queries used: {len(queries)}")
     print(f"[DISCOVERY] Raw accounts count: {len(raw_accounts)}")
 
     deduped = dedupe_discovered_accounts(raw_accounts)
     print(f"[DISCOVERY] Deduped accounts count: {len(deduped)}")
 
-    scored = []
-    for account in deduped:
-        score = score_account_for_niche(
-            niche=niche,
-            username=account.get("handle") or "",
-            full_name=account.get("full_name") or "",
-            category=account.get("category") or "",
-        )
-        enriched = dict(account)
-        enriched["niche_score"] = score
-        scored.append(enriched)
+    scored = merge_and_score_discovered_accounts(niche=niche, accounts=deduped)
     print(f"[DISCOVERY] Scored accounts count: {len(scored)}")
-
-    scored.sort(
-        key=lambda a: (
-            float(a.get("niche_score") or 0.0),
-            len((a.get("full_name") or "").strip()),
-            bool(a.get("is_verified")),
-            not bool(a.get("is_private")),
-            a.get("handle") or "",
-        ),
-        reverse=True,
-    )
 
     annotated = annotate_existing_seed_accounts("instagram", scored)
     fresh_count = sum(1 for a in annotated if not bool(a.get("already_seeded")))
     print(f"[DISCOVERY] Fresh (not already seeded) count: {fresh_count}")
 
-    filtered = [a for a in annotated if float(a.get("niche_score") or 0.0) >= 0.35]
-    print(f"[DISCOVERY] Filtered (niche score >= 0.35) count: {len(filtered)}")
-    return filtered[:limit]
+    # Prefer meaningful matches, but keep a softer fallback when the niche is hard.
+    strong_matches = [a for a in annotated if float(a.get("niche_score") or 0.0) >= 0.35]
+    soft_matches = [a for a in annotated if 0.20 <= float(a.get("niche_score") or 0.0) < 0.35]
+
+    fresh_strong = [a for a in strong_matches if not a.get("already_seeded")]
+    fresh_soft = [a for a in soft_matches if not a.get("already_seeded")]
+    seeded_strong = [a for a in strong_matches if a.get("already_seeded")]
+
+    expanded_from_seeds = []
+    if len(fresh_strong) < limit:
+        expanded_from_seeds = expand_accounts_from_seed(
+            platform="instagram",
+            niche=niche,
+            limit=max(limit * 2, 20),
+        )
+
+    expanded_scored = merge_and_score_discovered_accounts(niche=niche, accounts=expanded_from_seeds)
+    expanded_annotated = annotate_existing_seed_accounts("instagram", expanded_scored)
+    expanded_fresh = [
+        a for a in expanded_annotated
+        if not a.get("already_seeded")
+        and float(a.get("niche_score") or 0.0) >= 0.20
+    ]
+
+    combined = []
+    seen = set()
+
+    def add_many(accounts: list[dict]):
+        for account in accounts:
+            handle = normalize_instagram_handle(account.get("handle") or "")
+            if not handle or handle in seen:
+                continue
+            seen.add(handle)
+            combined.append(account)
+
+    add_many(fresh_strong)
+    add_many(expanded_fresh)
+    add_many(fresh_soft)
+    add_many(seeded_strong)
+
+    filtered_count = len(fresh_strong) + len(expanded_fresh) + len(fresh_soft)
+    print(f"[DISCOVERY] Fresh strong count: {len(fresh_strong)}")
+    print(f"[DISCOVERY] Expanded fresh count: {len(expanded_fresh)}")
+    print(f"[DISCOVERY] Fresh soft count: {len(fresh_soft)}")
+    print(f"[DISCOVERY] Filtered usable count: {filtered_count}")
+
+    return combined[:limit]
 
 def expand_accounts_from_seed(platform: str, niche: str, limit: int = 20) -> list[dict]:
     """
@@ -378,8 +574,11 @@ def expand_accounts_from_seed(platform: str, niche: str, limit: int = 20) -> lis
             SELECT handle
             FROM seed_accounts
             WHERE platform = ?
-            ORDER BY RANDOM()
-            LIMIT 10
+            ORDER BY
+                CASE WHEN last_crawled_at IS NULL THEN 0 ELSE 1 END ASC,
+                last_crawled_at ASC,
+                RANDOM()
+            LIMIT 25
             """,
             [platform],
         ).fetchall()
@@ -398,7 +597,7 @@ def expand_accounts_from_seed(platform: str, niche: str, limit: int = 20) -> lis
     raw_accounts = []
     for handle in seed_handles:
         raw_accounts.extend(
-            fetch_instagram_topsearch_accounts(query=handle, limit=10)
+            fetch_instagram_topsearch_accounts(query=handle, limit=max(10, min(limit, 25)))
         )
     print(f"[EXPANSION] Raw expanded accounts: {len(raw_accounts)}")
 

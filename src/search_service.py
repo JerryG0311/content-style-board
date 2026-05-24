@@ -58,10 +58,21 @@ def get_niche_health(platform: str, style: str, niche: str = "") -> dict:
     newest_collected_at = (total_row["newest_collected_at"] if total_row else "") or ""
     style_posts = int((style_row["style_posts"] if style_row else 0) or 0)
 
+    minimum_style_posts = 20
+
+    if style == "talking-head":
+        minimum_style_posts = 12
+    elif style == "multi-clip":
+        minimum_style_posts = 15
+    elif style == "single-clip":
+        minimum_style_posts = 15
+    elif style == "carousel":
+        minimum_style_posts = 20
+
     healthy = (
         total_posts >= 30
         and distinct_accounts >= 8
-        and style_posts >= 5
+        and style_posts >= minimum_style_posts
     )
 
     return {

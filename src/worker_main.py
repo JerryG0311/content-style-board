@@ -9,12 +9,31 @@ from .jobs import (
     JOB_CLASSIFY_REEL_VIDEO,
     JOB_CRAWL_INSTAGRAM_ACCOUNT,
     JOB_EXPAND_NICHE,
+    update_crawl_job_status,
 )
 
 RABBITMQ_URL = os.getenv(
     "RABBITMQ_URL",
     "amqp://guest:guest@localhost:5672/%2F",
 )
+
+def summarize_worker_result(result: dict) -> dict:
+    if not isinstance(result, dict):
+        return {"result": result}
+    
+    return {
+        "ok": result.get("ok"),
+        "expanded": result.get("expanded"),
+        "reason": result.get("reason"),
+        "queued_count": result.get("queued_count"),
+        "skipped_count": result.get("skipped_count"),
+        "discovery_limit": result.get("discovery_limit"),
+        "niche_health": result.get("niche_health"),
+        "discovered_accounts_count": len(result.get("discovered_accounts") or []),
+        "existing_seed_accounts_count": len(result.get("existing_seed_accounts") or []),
+        "selected_accounts_count": len(result.get("selected_accounts") or []),
+        "crawl_jobs_count": len(result.get("crawl_jobs") or []),
+    }
 
 
 def main():
@@ -31,8 +50,15 @@ def main():
             job = json.loads(body)
             job_type = job.get("job_type")
             payload = job.get("payload", {})
+            job_id = payload.get("job_id") or job.get("job_id") or job.get("id")
 
             print(f"\nReceived job: {job_type}")
+
+            if job_id:
+                update_crawl_job_status(
+                    job_id=job_id,
+                    status="processing",
+                )
 
             if job_type == JOB_CLASSIFY_REEL_VIDEO:
                 handle_classify_reel_video_job(payload)
@@ -47,15 +73,34 @@ def main():
                     niche=payload.get("niche", ""),
                     limit=int(payload.get("crawl_accounts", 10)),
                 )
-                print(f"Expand niche queued crawl work: {result}")
+                print(f"Expand niche summary: {summarize_worker_result(result)}")
 
             else:
                 print(f"Unknown job type: {job_type}")
+
+            if job_id:
+                update_crawl_job_status(
+                    job_id=job_id,
+                    status="completed",
+                )
 
             ch.basic_ack(delivery_tag=method.delivery_tag)
 
         except Exception as e:
             print(f"Worker error: {e}")
+            try:
+                failed_job = json.loads(body)
+                failed_payload = failed_job.get("payload", {})
+                failed_job_id = failed_payload.get("job_id") or failed_job.get("job_id") or failed_job.get("id")
+                if failed_job_id:
+                    update_crawl_job_status(
+                        job_id=failed_job_id,
+                        status="failed",
+                        error_message=str(e),
+                    )
+            except Exception as status_error:
+                print(f"Failed to update job status after error: {status_error}")
+
             try:
                 ch.basic_ack(delivery_tag=method.delivery_tag)
             except Exception as ack_error:

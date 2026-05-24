@@ -1,3 +1,4 @@
+from datetime import datetime, timezone, timedelta
 from .discovery_service import discover_instagram_accounts_for_niche
 from .jobs import (
     JOB_CRAWL_INSTAGRAM_ACCOUNT,
@@ -134,15 +135,23 @@ def enqueue_account_crawl(platform: str, handle: str, niche: str = "") -> dict:
     }
 
 
-def get_existing_seed_accounts_for_niche(platform: str, niche: str = "", limit: int = 10) -> list[dict]:
+def get_existing_seed_accounts_for_niche(
+    platform: str,
+    niche: str = "",
+    limit: int = 10,
+    min_hours_since_crawl: int = 24,
+) -> list[dict]:
     """
-    Fetch existing active seed accounts for a niche so expansion can still queue
-    crawl jobs even when discovery returns no fresh accounts.
+    Fetch active seed accounts for a niche, but avoid immediately re-crawling
+    accounts that were recently crawled and mostly return already-saved posts.
     """
 
     platform = (platform or "instagram").lower().strip()
     niche = (niche or "").strip().lower()
     limit = max(1, int(limit or 10))
+    min_hours_since_crawl = max(1, int(min_hours_since_crawl or 24))
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=min_hours_since_crawl)).isoformat()
 
     where = ["platform = ?", "is_active = 1"]
     params = [platform]
@@ -150,6 +159,9 @@ def get_existing_seed_accounts_for_niche(platform: str, niche: str = "", limit: 
     if niche:
         where.append("LOWER(niche) LIKE ?")
         params.append(f"%{niche}%")
+
+    where.append("(last_crawled_at IS NULL OR last_crawled_at < ?)")
+    params.append(cutoff)
 
     sql = f"""
         SELECT *
@@ -216,8 +228,10 @@ def expand_niche_if_needed(platform: str, style: str, niche: str, limit: int = 1
             "crawl_jobs": [],
         }
 
+    discovery_limit = max(limit * 3, 30)
+
     try:
-        discovered_accounts = discover_instagram_accounts_for_niche(niche=niche, limit=limit)
+        discovered_accounts = discover_instagram_accounts_for_niche(niche=niche, limit=discovery_limit)
     except Exception as exc:
         print(f"[EXPANSION] Discovery failed for niche={niche}: {exc}")
         discovered_accounts = []
@@ -226,6 +240,7 @@ def expand_niche_if_needed(platform: str, style: str, niche: str, limit: int = 1
         platform=platform,
         niche=niche,
         limit=limit,
+        min_hours_since_crawl=24,
     )
 
     merged_accounts = []
@@ -276,6 +291,26 @@ def expand_niche_if_needed(platform: str, style: str, niche: str, limit: int = 1
         )
         crawl_jobs.append(crawl_result)
 
+    queued_count = len([job for job in crawl_jobs if job.get("queued")])
+    skipped_count = len([job for job in crawl_jobs if not job.get("queued")])
+
+    if queued_count == 0:
+        return {
+            "ok": True,
+            "expanded": False,
+            "reason": "no_eligible_accounts_available",
+            "niche_health": decision.get("niche_health", {}),
+            "discovered_accounts": discovered_accounts,
+            "existing_seed_accounts": existing_seed_accounts,
+            "selected_accounts": selected_accounts,
+            "seed_results": seed_results,
+            "crawl_jobs": crawl_jobs,
+            "queued_count": queued_count,
+            "skipped_count": skipped_count,
+            "seed_recrawl_cooldown_hours": 24,
+            "discovery_limit": discovery_limit,
+        }
+
     return {
         "ok": True,
         "expanded": True,
@@ -286,6 +321,8 @@ def expand_niche_if_needed(platform: str, style: str, niche: str, limit: int = 1
         "selected_accounts": selected_accounts,
         "seed_results": seed_results,
         "crawl_jobs": crawl_jobs,
-        "queued_count": len([job for job in crawl_jobs if job.get("queued")]),
-        "skipped_count": len([job for job in crawl_jobs if not job.get("queued")]),
+        "queued_count": queued_count,
+        "skipped_count": skipped_count,
+        "seed_recrawl_cooldown_hours": 24,
+        "discovery_limit": discovery_limit,
     }
