@@ -4,7 +4,7 @@ from typing import Optional
 import sqlite3
 from pathlib import Path
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 DATA_DIR = Path("data")
 DB_FILE = DATA_DIR / "app.db"
@@ -139,6 +139,90 @@ def increment_crawl_job_retry(job_id: int) -> dict:
         ).fetchone()
     return dict(row) if row else {}
 
+def has_recent_or_active_expand_job(
+        platform: str,
+        style: str,
+        niche: str,
+        cooldown_minutes: int = 30,
+) -> bool:
+    platform = (platform or "instagram").strip().lower()
+    style = (style or "carousel").strip().lower()
+    niche = (niche or "").strip()
+
+    if not niche:
+        return False
+    
+    target = f"{platform}:{style}:{niche}"
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=cooldown_minutes)).isoformat()
+
+    with get_db() as conn:
+        row = conn.execute(
+            """
+            SELECT id
+            FROM crawl_jobs
+            WHERE job_type = ?
+                AND target = ?
+                AND (
+                        status IN ('queued', 'processing', 'running')
+                        OR created_at >= ?
+                    )
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (JOB_EXPAND_NICHE, target, cutoff),
+        ).fetchone()
+    
+    return row is not None
+
+def queue_expand_niche_job_if_needed(
+        platform: str,
+        style: str,
+        niche: str,
+        discovery_limit: int = 16,
+        crawl_accounts: int = 10,
+        posts_per_account: int = 24,
+        cooldown_minutes: int = 30, 
+) -> dict:
+    platform = (platform or "instagram").strip().lower()
+    style = (style or "carousel").strip().lower()
+    niche = (niche or "").strip()
+
+    if not niche:
+        raise ValueError("niche is required")
+    
+    if has_recent_or_active_expand_job(
+        platform=platform,
+        style=style,
+        niche=niche,
+        cooldown_minutes=cooldown_minutes,
+    ):
+        return {
+            "queued": False,
+            "reason": "recent_or_active_expand_job_exists",
+            "platform": platform,
+            "style": style,
+            "niche": niche,
+            "cooldown_minutes": cooldown_minutes,
+        }
+    
+    job = queue_expand_niche_job(
+        platform=platform,
+        style=style,
+        niche=niche,
+        discovery_limit=discovery_limit,
+        crawl_accounts=crawl_accounts,
+        posts_per_account=posts_per_account,
+    )
+
+    return {
+        "queued": True,
+        "reason": "expand_niche_job_queued",
+        "job": job,
+        "platform": platform,
+        "style": style,
+        "niche": niche,
+        "cooldown_minutes": cooldown_minutes,
+    }
 
 def publish_rabbitmq_job(job_type: str, target: str, payload: Optional[dict] = None) -> None:
     """

@@ -1,0 +1,130 @@
+import time
+
+from src.jobs import queue_expand_niche_job_if_needed
+
+# Core niches to constantly expand and refresh
+SCHEDULED_NICHES = [
+    # Ecommerce / Business
+    "amazon fba",
+    "amazon wholesale",
+    "shopify",
+    "dropshipping",
+    "ecommerce",
+    "email marketing",
+    "copywriting",
+    "sales",
+    "entrepreneurship",
+    "business",
+    "online business",
+    "digital marketing",
+    "personal branding",
+    "social media marketing",
+    "content creation",
+    "ai business",
+    "real estate",
+
+    # Fitness / Health
+    "fitness",
+    "bodybuilding",
+    "fat loss",
+    "weight loss",
+    "running",
+    "crossfit",
+    "mens health",
+    "womens health",
+    "functional medicine",
+    "nutrition",
+    "biohacking",
+    "wellness",
+
+    # Self Improvement
+    "self improvement",
+    "discipline",
+    "motivation",
+    "mindset",
+    "productivity",
+    "psychology",
+    "mental health",
+    "confidence",
+
+    # Dating / Relationships
+    "dating",
+    "relationships",
+    "marriage",
+    "masculinity",
+    "femininity",
+    "attachment styles",
+
+    # Finance
+    "investing",
+    "stock market",
+    "crypto",
+    "personal finance",
+    "side hustles",
+
+    # Creator / Education
+    "youtube growth",
+    "instagram growth",
+    "podcasting",
+    "online coaching",
+    "course creators",
+
+    # Tech
+    "artificial intelligence",
+    "software engineering",
+    "coding",
+    "programming",
+    "web development",
+    "saas",
+    "ai",
+
+    # Lifestyle
+    "luxury lifestyle",
+    "travel",
+    "fashion",
+    "mens fashion",
+    "beauty",
+    "skincare",
+
+    # Misc Viral Niches
+    "memes",
+    "storytelling",
+    "life advice",
+    "career advice",
+]
+
+STYLES = [
+    "single-clip",
+    "multi-clip",
+    "talking-head",
+    "carousel",
+]
+
+REFRESH_INTERVAL_SECONDS = 60 * 15 # every 15 minutes
+
+def run_scheduler():
+    print("Scheduler started...")
+
+    while True:
+        for niche in SCHEDULED_NICHES:
+            for style in STYLES:
+                try:
+                    print(f"[SCHEDULER] Queueing expansion: {niche} | {style}")
+
+                    queue_expand_niche_job_if_needed(
+                        platform="instagram",
+                        niche=niche,
+                        style=style,
+                    )
+                
+                except Exception as e:
+                    print(f"[SCHEDULER ERROR] {niche} | {style} -> {e}")
+        
+        print(
+            f"[SCHEDULER] Sleeping for {REFRESH_INTERVAL_SECONDS} seconds..."
+        )
+
+        time.sleep(REFRESH_INTERVAL_SECONDS)
+
+if __name__ == "__main__":
+    run_scheduler()

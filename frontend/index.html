@@ -1712,6 +1712,14 @@
     return Math.max(a, Math.min(b, n));
   }
 
+  function makeId(prefix = "id") {
+    if (window.crypto && typeof window.crypto.randomUUID === "function") {
+      return window.crypto.randomUUID();
+    }
+
+    return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  }
+
   function applyViewport() {
     canvasEl.style.transform = `translate(${viewportX}px, ${viewportY}px) scale(${viewportScale})`;
   }
@@ -1962,7 +1970,7 @@ platformSelect.addEventListener("change", () => {
 
   function createGroupBox(query, results, id, emptyMessage = "", statusText = "") {
     const box = document.createElement("div");
-    box.dataset.id = id || crypto.randomUUID();
+    box.dataset.id = id || makeId("group");
     box.dataset.query = query;
     box.dataset.results = JSON.stringify(results);
     box.style.position = "absolute";
@@ -2568,7 +2576,7 @@ function createSideResultCard(item) {
   const previewMode = (item.preview_mode || "").toLowerCase().trim();
   const backendEmbedUrl = (item.embed_url || "").trim();
   const thumbUrl = (item.thumbnail || item.preview_url || item.previewUrl || "").trim();
-  const itemKey = item.id || url || crypto.randomUUID();
+  const itemKey = item.id || url || makeId("group");
 
   const card = document.createElement("div");
   card.className = "side-result-card";
@@ -3605,6 +3613,68 @@ function openSidePanel(panelName) {
       sidePanel.style.display = "none";
       railButtons.forEach((btn) => btn.classList.remove("is-active"));
     });
+  }
+  // Defensive Create Group save handler.
+  if (saveCreateGroupBtn) {
+    saveCreateGroupBtn.addEventListener(
+      "click",
+      (e) => {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+
+        const selectedItems = Array.from(selectedSearchItems.values());
+
+        if (!selectedItems.length) {
+          alert("Select at least one post before creating a group.");
+          return;
+        }
+
+        const groupName = (groupNameInput?.value || "").trim();
+
+        if (!groupName) {
+          alert("Please enter a group name.");
+          if (groupNameInput) groupNameInput.focus();
+          return;
+        }
+
+        const groupBox = createGroupBox(
+          groupName,
+          selectedItems,
+          makeId("group")
+        );
+
+        groupBox.dataset.groupColor = selectedGroupColor || "white";
+
+        if (selectedGroupColor === "blue") {
+          groupBox.style.background = "#eff6ff";
+        } else if (selectedGroupColor === "pink") {
+          groupBox.style.background = "#fff7fb";
+        } else if (selectedGroupColor === "green") {
+          groupBox.style.background = "#f0fdf4";
+        } else if (selectedGroupColor === "yellow") {
+          groupBox.style.background = "#fffbeb";
+        } else {
+          groupBox.style.background = "rgba(255, 255, 255, 0.96)";
+        }
+
+        canvasEl.appendChild(groupBox);
+
+        selectedSearchItems.clear();
+        updateSelectedResultsBar();
+
+        document.querySelectorAll(".side-result-card.is-selected").forEach((card) => {
+          card.classList.remove("is-selected");
+        });
+
+        if (groupModalOverlay) {
+          groupModalOverlay.classList.remove("is-visible");
+          groupModalOverlay.setAttribute("aria-hidden", "true");
+        }
+
+        if (groupNameInput) groupNameInput.value = "";
+      },
+      true
+    );
   }
 </script>
 

@@ -681,6 +681,13 @@ def init_db() -> None:
                 handle TEXT NOT NULL,
                 niche TEXT NOT NULL DEFAULT '',
                 is_active INTEGER NOT NULL DEFAULT 1,
+                profile_name TEXT NOT NULL DEFAULT '',
+                bio TEXT NOT NULL DEFAULT '',
+                profile_pic_url TEXT NOT NULL DEFAULT '',
+                follower_count INTEGER NOT NULL DEFAULT 0,
+                following_count INTEGER NOT NULL DEFAULT 0,
+                post_count INTEGER NOT NULL DEFAULT 0,
+                account_metrics_collected_at TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL,
                 last_crawled_at TEXT
             );
@@ -705,6 +712,12 @@ def init_db() -> None:
                 embed_url TEXT NOT NULL DEFAULT '',
                 niche TEXT NOT NULL DEFAULT '',
                 profile_rank INTEGER NOT NULL DEFAULT 999999,
+                like_count INTEGER NOT NULL DEFAULT 0,
+                comment_count INTEGER NOT NULL DEFAULT 0,
+                view_count INTEGER NOT NULL DEFAULT 0,
+                engagement_score REAL NOT NULL DEFAULT 0,
+                normalized_engagement_score REAL NOT NULL DEFAULT 0,
+                metrics_collected_at TEXT NOT NULL DEFAULT '',
                 collected_at TEXT NOT NULL,
                 created_at TEXT NOT NULL
             );
@@ -787,6 +800,64 @@ def init_db() -> None:
         if "profile_rank" not in existing_cols:
             conn.execute(
                 "ALTER TABLE posts ADD COLUMN profile_rank INTEGER NOT NULL DEFAULT 999999"
+            )
+        if "like_count" not in existing_cols:
+            conn.execute(
+                "ALTER TABLE posts ADD COLUMN like_count INTEGER NOT NULL DEFAULT 0"
+            )
+        if "comment_count" not in existing_cols:
+            conn.execute(
+                "ALTER TABLE posts ADD COLUMN comment_count INTEGER NOT NULL DEFAULT 0"
+            )
+        if "view_count" not in existing_cols:
+            conn.execute(
+                "ALTER TABLE posts ADD COLUMN view_count INTEGER NOT NULL DEFAULT 0"
+            )
+        if "engagement_score" not in existing_cols:
+            conn.execute(
+                "ALTER TABLE posts ADD COLUMN engagement_score REAL NOT NULL DEFAULT 0"
+            )
+        if "normalized_engagement_score" not in existing_cols:
+            conn.execute(
+                "ALTER TABLE posts ADD COLUMN normalized_engagement_score REAL NOT NULL DEFAULT 0"
+            )
+        if "metrics_collected_at" not in existing_cols:
+            conn.execute(
+                "ALTER TABLE posts ADD COLUMN metrics_collected_at TEXT NOT NULL DEFAULT ''"
+            )
+
+        existing_seed_cols = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(seed_accounts)").fetchall()
+        }
+
+        if "profile_name" not in existing_seed_cols:
+            conn.execute(
+                "ALTER TABLE seed_accounts ADD COLUMN profile_name TEXT NOT NULL DEFAULT ''"
+            )
+        if "bio" not in existing_seed_cols:
+            conn.execute(
+                "ALTER TABLE seed_accounts ADD COLUMN bio TEXT NOT NULL DEFAULT ''"
+            )
+        if "profile_pic_url" not in existing_seed_cols:
+            conn.execute(
+                "ALTER TABLE seed_accounts ADD COLUMN profile_pic_url TEXT NOT NULL DEFAULT ''"
+            )
+        if "follower_count" not in existing_seed_cols:
+            conn.execute(
+                "ALTER TABLE seed_accounts ADD COLUMN follower_count INTEGER NOT NULL DEFAULT 0"
+            )
+        if "following_count" not in existing_seed_cols:
+            conn.execute(
+                "ALTER TABLE seed_accounts ADD COLUMN following_count INTEGER NOT NULL DEFAULT 0"
+            )
+        if "post_count" not in existing_seed_cols:
+            conn.execute(
+                "ALTER TABLE seed_accounts ADD COLUMN post_count INTEGER NOT NULL DEFAULT 0"
+            )
+        if "account_metrics_collected_at" not in existing_seed_cols:
+            conn.execute(
+                "ALTER TABLE seed_accounts ADD COLUMN account_metrics_collected_at TEXT NOT NULL DEFAULT ''"
             )
         
         existing_job_cols = {
@@ -926,12 +997,102 @@ def create_seed_account(platform: str, handle: str, niche: str = "") -> dict:
 
 
 def list_seed_accounts() -> list:
+
     with get_db() as conn:
         rows = conn.execute(
             "SELECT * FROM seed_accounts ORDER BY created_at DESC, id DESC"
         ).fetchall()
     return [dict(r) for r in rows]
 
+
+# New helper function: update_seed_account_metrics
+def update_seed_account_metrics(
+    platform: str,
+    handle: str,
+    profile_name: str = "",
+    bio: str = "",
+    profile_pic_url: str = "",
+    follower_count: int = 0,
+    following_count: int = 0,
+    post_count: int = 0,
+) -> dict:
+    platform = (platform or "instagram").lower().strip()
+    handle = (handle or "").strip().lstrip("@")
+    profile_name = (profile_name or "").strip()
+    bio = (bio or "").strip()
+    profile_pic_url = (profile_pic_url or "").strip()
+    follower_count = int(follower_count or 0)
+    following_count = int(following_count or 0)
+    post_count = int(post_count or 0)
+
+    if not platform or not handle:
+        return {}
+
+    now = utc_now_iso() if (profile_name or bio or profile_pic_url or follower_count or following_count or post_count) else ""
+
+    with get_db() as conn:
+        conn.execute(
+            """
+            UPDATE seed_accounts
+            SET
+                profile_name = COALESCE(NULLIF(?, ''), profile_name),
+                bio = COALESCE(NULLIF(?, ''), bio),
+                profile_pic_url = COALESCE(NULLIF(?, ''), profile_pic_url),
+                follower_count = CASE WHEN ? > 0 THEN ? ELSE follower_count END,
+                following_count = CASE WHEN ? > 0 THEN ? ELSE following_count END,
+                post_count = CASE WHEN ? > 0 THEN ? ELSE post_count END,
+                account_metrics_collected_at = CASE WHEN ? != '' THEN ? ELSE account_metrics_collected_at END
+            WHERE platform = ? AND handle = ?
+            """,
+            (
+                profile_name,
+                bio,
+                profile_pic_url,
+                follower_count,
+                follower_count,
+                following_count,
+                following_count,
+                post_count,
+                post_count,
+                now,
+                now,
+                platform,
+                handle,
+            ),
+        )
+        row = conn.execute(
+            "SELECT * FROM seed_accounts WHERE platform = ? AND handle = ? LIMIT 1",
+            (platform, handle),
+        ).fetchone()
+
+    return dict(row) if row else {}
+
+def get_seed_account_metrics(platform: str, handle: str) -> dict:
+    platform = (platform or "instagram").lower().strip()
+    handle = (handle or "").strip().lstrip("@")
+
+    if not platform or not handle:
+        return {}
+    
+    with get_db() as conn:
+        row = conn.execute(
+            """
+            SELECT
+                profile_name,
+                bio,
+                profile_pic_url,
+                follower_count,
+                following_count,
+                post_count,
+                account_metrics_collected_at
+            FROM seed_accounts
+            WHERE platform = ? AND handle = ?
+            LIMIT 1
+            """,
+            (platform, handle),
+        ).fetchone()
+    
+    return dict(row) if row else {}
 
 def upsert_post(
     platform: str,
@@ -946,6 +1107,9 @@ def upsert_post(
     classified_post_type: str = "",
     classifier_confidence: float = 0.0,
     classifier_version: str = "",
+    like_count: int = 0,
+    comment_count: int = 0,
+    view_count: int = 0,
 ) -> dict:
     platform = (platform or "").lower().strip()
     post_url = (post_url or "").strip()
@@ -959,6 +1123,35 @@ def upsert_post(
     classified_post_type = (classified_post_type or "").strip()
     classifier_version = (classifier_version or "").strip()
 
+    like_count = int(like_count or 0)
+    comment_count = int(comment_count or 0)
+    view_count = int(view_count or 0)
+
+    engagement_score = 0.0
+    raw_engagement_points = like_count + (comment_count * 2)
+
+    if view_count > 0:
+        engagement_score = round(
+            (raw_engagement_points / view_count) * 100,
+            4
+        )
+    elif raw_engagement_points:
+        engagement_score = float(raw_engagement_points)
+    
+    creator_metrics = get_seed_account_metrics(platform, account_handle)
+
+    creator_follower_count = int(
+        creator_metrics.get("follower_count") or 0
+    )
+
+    normalized_engagement_score = 0.0
+
+    if creator_follower_count > 0 and raw_engagement_points > 0:
+        normalized_engagement_score = round(
+            (raw_engagement_points / creator_follower_count) * 100,
+            4
+        )
+        
     if not platform:
         raise ValueError("platform is required")
     if not post_url:
@@ -973,6 +1166,7 @@ def upsert_post(
     embed_url = build_embed_url(platform, post_url)
     now = utc_now_iso()
     classified_at = now if classified_post_type else ""
+    metrics_collected_at = now if (like_count or comment_count or view_count) else ""
 
     with get_db() as conn:
         existing = conn.execute(
@@ -994,6 +1188,16 @@ def upsert_post(
                 else (existing["classifier_version"] or "")
             )
             keep_classified_at = classified_at if classified_post_type else (existing["classified_at"] or "")
+            keep_like_count = like_count if like_count else int(existing["like_count"] or 0)
+            keep_comment_count = comment_count if comment_count else int(existing["comment_count"] or 0)
+            keep_view_count = view_count if view_count else int(existing["view_count"] or 0)
+            keep_engagement_score = engagement_score if (like_count or comment_count or view_count) else float(existing["engagement_score"] or 0)
+            keep_normalized_engagement_score = (
+                normalized_engagement_score
+                if (like_count or comment_count or view_count)
+                else float(existing["normalized_engagement_score"] or 0)
+            )
+            keep_metrics_collected_at = metrics_collected_at if (like_count or comment_count or view_count) else (existing["metrics_collected_at"] or "")
 
             conn.execute(
                 """
@@ -1014,6 +1218,12 @@ def upsert_post(
                     embed_url = ?,
                     niche = ?,
                     profile_rank = ?,
+                    like_count = ?,
+                    comment_count = ?,
+                    view_count = ?,
+                    engagement_score = ?,
+                    normalized_engagement_score = ?,
+                    metrics_collected_at = ?,
                     collected_at = ?
                 WHERE id = ?
                 """,
@@ -1033,6 +1243,12 @@ def upsert_post(
                     embed_url,
                     niche,
                     profile_rank,
+                    keep_like_count,
+                    keep_comment_count,
+                    keep_view_count,
+                    keep_engagement_score,
+                    keep_normalized_engagement_score,
+                    keep_metrics_collected_at,
                     now,
                     existing_id,
                 ),
@@ -1049,8 +1265,9 @@ def upsert_post(
                 platform, account_handle, post_url, shortcode, post_type,
                 classified_post_type, classifier_confidence, classifier_version, classified_at,
                 caption, preview_mode, preview_url, embed_url, niche, profile_rank,
+                like_count, comment_count, view_count, engagement_score, normalized_engagement_score, metrics_collected_at,
                 collected_at, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 platform,
@@ -1068,6 +1285,12 @@ def upsert_post(
                 embed_url,
                 niche,
                 profile_rank,
+                like_count,
+                comment_count,
+                view_count,
+                engagement_score,
+                normalized_engagement_score,
+                metrics_collected_at,
                 now,
                 now,
             ),
@@ -1251,33 +1474,33 @@ def search_posts_index(
     refresh = bool(refresh)
     is_reel_substyle = style in ("single-clip", "multi-clip", "talking-head")
 
-    where = ["platform = ?"]
+    where = ["p.platform = ?"]
     params = [platform]
 
     if style:
         if style == "carousel":
-            where.append("post_type = ?")
+            where.append("p.post_type = ?")
             params.append("carousel")
         elif is_reel_substyle:
-            where.append("classified_post_type = ?")
+            where.append("p.classified_post_type = ?")
             params.append(style)
-            where.append("classifier_version LIKE ?")
+            where.append("p.classifier_version LIKE ?")
             params.append("%openai_frames_v1%")
         elif style == "reel":
-            where.append("post_type = ?")
+            where.append("p.post_type = ?")
             params.append("reel")
         else:
-            where.append("post_type = ?")
+            where.append("p.post_type = ?")
             params.append(style)
 
     if niche:
-        where.append("(LOWER(niche) LIKE ? OR LOWER(caption) LIKE ? OR LOWER(account_handle) LIKE ?)")
+        where.append("(LOWER(p.niche) LIKE ? OR LOWER(p.caption) LIKE ? OR LOWER(p.account_handle) LIKE ?)")
         like = f"%{niche}%"
         params.extend([like, like, like])
     
     if exclude_urls:
         placeholders = ",".join(["?"] * len(exclude_urls))
-        where.append(f"post_url NOT IN ({placeholders})")
+        where.append(f"p.post_url NOT IN ({placeholders})")
         params.extend(exclude_urls)
 
     order_by_parts = []
@@ -1289,11 +1512,11 @@ def search_posts_index(
         niche_like = f"%{exact_niche}%"
         order_by_parts.append(
             "CASE "
-            "WHEN LOWER(niche) = ? AND LOWER(account_handle) NOT IN ('amazon') THEN 0 "
-            "WHEN LOWER(account_handle) LIKE ? AND LOWER(account_handle) NOT IN ('amazon') THEN 1 "
-            "WHEN LOWER(caption) LIKE ? AND LOWER(account_handle) NOT IN ('amazon') THEN 2 "
-            "WHEN LOWER(niche) LIKE ? AND LOWER(account_handle) NOT IN ('amazon') THEN 3 "
-            "WHEN LOWER(account_handle) IN ('amazon') THEN 10 "
+            "WHEN LOWER(p.niche) = ? AND LOWER(p.account_handle) NOT IN ('amazon') THEN 0 "
+            "WHEN LOWER(p.account_handle) LIKE ? AND LOWER(p.account_handle) NOT IN ('amazon') THEN 1 "
+            "WHEN LOWER(p.caption) LIKE ? AND LOWER(p.account_handle) NOT IN ('amazon') THEN 2 "
+            "WHEN LOWER(p.niche) LIKE ? AND LOWER(p.account_handle) NOT IN ('amazon') THEN 3 "
+            "WHEN LOWER(p.account_handle) IN ('amazon') THEN 10 "
             "ELSE 5 END ASC"
         )
         params.extend([exact_niche, niche_like, niche_like, niche_like])
@@ -1302,35 +1525,46 @@ def search_posts_index(
     if refresh:
         order_by_parts.append("RANDOM()")
     else:
-        order_by_parts.append("collected_at DESC")
-        order_by_parts.append("profile_rank ASC")
+        order_by_parts.append("p.collected_at DESC")
+        order_by_parts.append("p.profile_rank ASC")
 
     # 4) Then style preference
     if is_reel_substyle:
         order_by_parts.append(
             "CASE "
-            "WHEN classified_post_type = ? THEN 0 "
-            "WHEN classified_post_type IN ('single-clip', 'multi-clip', 'talking-head') THEN 1 "
+            "WHEN p.classified_post_type = ? THEN 0 "
+            "WHEN p.classified_post_type IN ('single-clip', 'multi-clip', 'talking-head') THEN 1 "
             "ELSE 2 END ASC"
         )
         params.append(style)
     elif style == "reel":
         order_by_parts.append(
-            "CASE WHEN post_type = 'reel' THEN 0 ELSE 1 END ASC"
+            "CASE WHEN p.post_type = 'reel' THEN 0 ELSE 1 END ASC"
         )
     elif style == "carousel":
         order_by_parts.append(
-            "CASE WHEN post_type = 'carousel' THEN 0 ELSE 1 END ASC"
+            "CASE WHEN p.post_type = 'carousel' THEN 0 ELSE 1 END ASC"
         )
 
     # 5) Stable tiebreaker
     if not refresh:
-        order_by_parts.append("id DESC")
+        order_by_parts.append("p.id DESC")
 
 
     sql = f"""
-        SELECT *
-        FROM posts 
+        SELECT
+            p.*,
+            s.profile_name AS creator_profile_name,
+            s.bio AS creator_bio,
+            s.profile_pic_url AS creator_profile_pic_url,
+            s.follower_count AS creator_follower_count,
+            s.following_count AS creator_following_count,
+            s.post_count AS creator_post_count,
+            s.account_metrics_collected_at AS creator_metrics_collected_at
+        FROM posts p
+        LEFT JOIN seed_accounts s
+            ON s.platform = p.platform
+            AND s.handle = p.account_handle
         WHERE {' AND '.join(where)}
         ORDER BY {', '.join(order_by_parts)}
         LIMIT ?
@@ -1385,6 +1619,23 @@ def search_posts_index(
                 "account_handle": row.get("account_handle") or "",
                 "niche": row.get("niche") or "",
                 "niche_score": niche_score,
+                "like_count": row.get("like_count") or 0,
+                "comment_count": row.get("comment_count") or 0,
+                "view_count": row.get("view_count") or 0,
+                "engagement_score": row.get("engagement_score") or 0,
+                "normalized_engagement_score": row.get("normalized_engagement_score") or 0,
+                "metrics_collected_at": row.get("metrics_collected_at") or "",
+
+                "creator_profile_name": row.get("creator_profile_name") or "",
+                "creator_bio": row.get("creator_bio") or "",
+                "creator_profile_pic_url": row.get("creator_profile_pic_url") or "",
+
+                "creator_follower_count": row.get("creator_follower_count") or 0,
+                "creator_following_count": row.get("creator_following_count") or 0,
+                "creator_post_count": row.get("creator_post_count") or 0,
+
+                "creator_metrics_collected_at": row.get("creator_metrics_collected_at") or "",
+
                 "source": "local_index",
             }
         )
@@ -2082,6 +2333,23 @@ def collect_instagram_seed_account(handle: str, niche: str = "", max_posts: int 
     urls = []
     fetch_window = max(int(max_posts or 12) * 4, 24)
 
+    try:
+        from .playwright_helper import fetch_instagram_profile_metrics_playwright
+        profile_metrics = fetch_instagram_profile_metrics_playwright(handle)
+        if profile_metrics:
+            update_seed_account_metrics(
+                platform="instagram",
+                handle=handle,
+                profile_name=profile_metrics.get("profile_name") or "",
+                bio=profile_metrics.get("bio") or "",
+                profile_pic_url=profile_metrics.get("profile_pic_url") or "",
+                follower_count=int(profile_metrics.get("follower_count") or 0),
+                following_count=int(profile_metrics.get("following_count") or 0),
+                post_count=int(profile_metrics.get("post_count") or 0),
+            )
+    except Exception as e:
+        print(f"[PROFILE METRICS] Failed for @{handle}: {e}")
+
     # 1. Primary: extract post/reel URLs from the public profile HTML.
     urls = fetch_instagram_profile_post_urls(handle, max_posts=fetch_window)
     
@@ -2116,15 +2384,24 @@ def collect_instagram_seed_account(handle: str, niche: str = "", max_posts: int 
 
                 meta_title = ""
                 meta_preview_url = ""
+                like_count = 0
+                comment_count = 0
+                view_count = 0
 
                 try:
                     from .playwright_helper import fetch_instagram_post_metadata_playwright
                     meta = fetch_instagram_post_metadata_playwright(post_url)
                     meta_title = (meta.get("title") or "").strip()
                     meta_preview_url = (meta.get("preview_url") or "").strip()
+                    like_count = int(meta.get("like_count") or 0)
+                    comment_count = int(meta.get("comment_count") or 0)
+                    view_count = int(meta.get("view_count") or 0)
                 except Exception:
                     meta_title = ""
                     meta_preview_url = ""
+                    like_count = 0
+                    comment_count = 0
+                    view_count = 0
 
                 fallback_title = (
                     f"@{handle} • Instagram Reel"
@@ -2148,6 +2425,9 @@ def collect_instagram_seed_account(handle: str, niche: str = "", max_posts: int 
                     classified_post_type="carousel" if existing_tag == "carousel" else "",
                     classifier_confidence=0.99 if existing_tag == "carousel" else 0.0,
                     classifier_version="raw_structural_v1" if existing_tag == "carousel" else "",
+                    like_count=like_count,
+                    comment_count=comment_count,
+                    view_count=view_count,
                 )
                 print(f"[REFRESH existing metadata] {post_url}")
             else:
@@ -2161,6 +2441,9 @@ def collect_instagram_seed_account(handle: str, niche: str = "", max_posts: int 
         unfurled = unfurl_url(post_url)
         title = ""
         preview_url = ""
+        like_count = 0
+        comment_count = 0
+        view_count = 0
         if unfurled.get("ok"):
             title = (unfurled.get("title") or "").strip()
             preview_url = (unfurled.get("image") or "").strip()
@@ -2180,6 +2463,9 @@ def collect_instagram_seed_account(handle: str, niche: str = "", max_posts: int 
                     title = (meta.get("title") or "").strip() or title 
                 if not preview_url:
                     preview_url = (meta.get("preview_url") or "").strip()
+                like_count = int(meta.get("like_count") or 0)
+                comment_count = int(meta.get("comment_count") or 0)
+                view_count = int(meta.get("view_count") or 0)
             except Exception:
                 pass
        
@@ -2202,6 +2488,9 @@ def collect_instagram_seed_account(handle: str, niche: str = "", max_posts: int 
             classified_post_type="carousel" if tag == "carousel" else "",
             classifier_confidence=0.99 if tag == "carousel" else 0.0,
             classifier_version="raw_structural_v1" if tag == "carousel" else "",
+            like_count=like_count,
+            comment_count=comment_count,
+            view_count=view_count,
         )
         if row.get("_was_inserted"):
             created.append(row)
