@@ -1,3 +1,4 @@
+import random
 import time
 
 from src.jobs import queue_expand_niche_job_if_needed
@@ -100,14 +101,31 @@ STYLES = [
     "carousel",
 ]
 
-REFRESH_INTERVAL_SECONDS = 60 * 15 # every 15 minutes
+REFRESH_INTERVAL_SECONDS = 60 * 30  # every 30 minutes
+MAX_JOBS_PER_CYCLE = 20
+MIN_DELAY_BETWEEN_JOBS = 4
+MAX_DELAY_BETWEEN_JOBS = 12
 
 def run_scheduler():
     print("Scheduler started...")
 
     while True:
-        for niche in SCHEDULED_NICHES:
-            for style in STYLES:
+        queued_count = 0
+
+        shuffled_niches = list(SCHEDULED_NICHES)
+        random.shuffle(shuffled_niches)
+
+        shuffled_styles = list(STYLES)
+        random.shuffle(shuffled_styles)
+
+        for niche in shuffled_niches:
+            for style in shuffled_styles:
+                if queued_count >= MAX_JOBS_PER_CYCLE:
+                    print(
+                        f"[SCHEDULER] Reached cycle job limit ({MAX_JOBS_PER_CYCLE})"
+                    )
+                    break
+
                 try:
                     print(f"[SCHEDULER] Queueing expansion: {niche} | {style}")
 
@@ -116,7 +134,20 @@ def run_scheduler():
                         niche=niche,
                         style=style,
                     )
-                
+
+                    queued_count += 1
+
+                    sleep_seconds = random.randint(
+                        MIN_DELAY_BETWEEN_JOBS,
+                        MAX_DELAY_BETWEEN_JOBS,
+                    )
+
+                    print(
+                        f"[SCHEDULER] Cooling down for {sleep_seconds} seconds..."
+                    )
+
+                    time.sleep(sleep_seconds)
+
                 except Exception as e:
                     print(f"[SCHEDULER ERROR] {niche} | {style} -> {e}")
         

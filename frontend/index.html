@@ -771,6 +771,44 @@
         text-overflow: ellipsis;
       }
 
+      .side-result-intel {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 5px;
+        margin-top: 2px;
+      }
+
+      .side-result-intel-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        border: 1px solid #e2e8f0;
+        border-radius: 999px;
+        background: #f8fafc;
+        color: #475569;
+        padding: 4px 7px;
+        font-size: 10px;
+        font-weight: 850;
+        line-height: 1;
+        white-space: nowrap;
+      }
+
+      .side-result-intel-badge.score {
+        background: #eff6ff;
+        border-color: #bfdbfe;
+        color: #1d4ed8;
+      }
+
+      .side-result-intel-badge.creator {
+        color: #0f172a;
+      }
+
+      .side-result-intel-badge.hot {
+        background: #fff7ed;
+        border-color: #fed7aa;
+        color: #c2410c;
+      }
+
       .side-result-actions {
         display: flex;
         gap: 8px;
@@ -1720,6 +1758,87 @@
     return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   }
 
+  function compactNumber(value) {
+    const n = Number(value || 0);
+    if (!Number.isFinite(n) || n <= 0) return 0;
+    if (n >= 1000000000) return `${(n / 1000000000).toFixed(n >= 10000000000 ? 0 : 1).replace(/\.0$/, "")}B`;
+    if (n >= 1000000) return `${(n / 1000000).toFixed(n >= 10000000 ? 0 : 1).replace(/\.0$/, "")}M`;
+    if (n >= 1000) return `${(n / 1000).toFixed(n >= 10000 ? 0 : 1).replace(/\.0$/, "")}K`;
+    return String(Math.round(n));
+  }
+
+  function compactPercent(value) {
+    const n = Number(value || 0);
+    if (!Number.isFinite(n) || n <= 0) return "0%";
+    return `${n.toFixed(n >= 10 ? 1 : 2).replace(/\.0$/, "")}%`;
+  }
+
+  function createIntelBadge(label, className = "") {
+    const badge = document.createElement("span");
+    badge.className = `side-result-intel-badge ${className}`.trim();
+    badge.textContent = label;
+
+    const isEngagementBadge = String(label || "").includes("⚡");
+    if (isEngagementBadge) {
+      const match = String(label || "").match(/(\d+(?:\.\d+)?)/);
+      const score = match ? Number(match[1]) : 0;
+
+      if (score >= 100) {
+        badge.style.background = "#fef2f2";
+        badge.style.borderColor = "#fecaca";
+        badge.style.color = "#dc2626";
+      } else if (score >= 40) {
+        badge.style.background = "#fff7ed";
+        badge.style.borderColor = "#fdba74";
+        badge.style.color = "#ea580c";
+      } else if (score > 0) {
+        badge.style.background = "#eff6ff";
+        badge.style.borderColor = "#bfdbfe";
+        badge.style.color = "#2563eb";
+      }
+    }
+
+    return badge;
+  }
+
+  function appendSideResultIntelBadges(meta, item, card) {
+    const badges = document.createElement("div");
+    badges.className = "side-result-intel";
+
+    const followerCount = Number(item.creator_follower_count || card.dataset.creatorFollowerCount || 0);
+    const likeCount = Number(item.like_count || card.dataset.likeCount || 0);
+    const commentCount = Number(item.comment_count || card.dataset.commentCount || 0);
+    const viewCount = Number(item.view_count || card.dataset.viewCount || 0);
+    const normalizedScore = Number(item.normalized_engagement_score || card.dataset.normalizedEngagementScore || 0);
+    const engagementScore = Number(item.engagement_score || card.dataset.engagementScore || 0);
+
+    if (followerCount > 0) {
+      badges.appendChild(createIntelBadge(`👤 ${compactNumber(followerCount)}`, "creator"));
+    }
+
+    if (likeCount > 0) {
+      badges.appendChild(createIntelBadge(`❤️ ${compactNumber(likeCount)}`));
+    }
+
+    if (commentCount > 0) {
+      badges.appendChild(createIntelBadge(`💬 ${compactNumber(commentCount)}`));
+    }
+
+    if (viewCount > 0) {
+      badges.appendChild(createIntelBadge(`👁 ${compactNumber(viewCount)}`));
+    }
+
+    if (normalizedScore > 0) {
+      badges.appendChild(createIntelBadge(`⚡ ${compactPercent(normalizedScore)}`, "hot"));
+    } else if (engagementScore > 0) {
+      badges.appendChild(createIntelBadge(`⚡ ${compactNumber(engagementScore)}`, "score"));
+    }
+
+    if (badges.children.length) {
+      meta.appendChild(badges);
+    }
+  }
+
   function applyViewport() {
     canvasEl.style.transform = `translate(${viewportX}px, ${viewportY}px) scale(${viewportScale})`;
   }
@@ -2565,7 +2684,13 @@ function renderSidePanelResults(results, emptyMessage = "No saved results for th
   }
 
   for (const item of results) {
-    searchResultsGrid.appendChild(createSideResultCard(item));
+    const card = createSideResultCard(item);
+    const cardMeta = card.querySelector(".side-result-meta");
+    
+    if (cardMeta && !cardMeta.querySelector(".side-result-intel")) {
+      appendSideResultIntelBadges(cardMeta, item, card);
+    }
+    searchResultsGrid.appendChild(card);
   }
 }
 
@@ -2577,6 +2702,13 @@ function createSideResultCard(item) {
   const backendEmbedUrl = (item.embed_url || "").trim();
   const thumbUrl = (item.thumbnail || item.preview_url || item.previewUrl || "").trim();
   const itemKey = item.id || url || makeId("group");
+
+  const likeCount = Number(item.like_count || 0);
+  const commentCount = Number(item.comment_count || 0);
+  const viewCount = Number(item.view_count || 0);
+  const engagementScore = Number(item.engagement_score || 0);
+  const normalizedEngagementScore = Number(item.normalized_engagement_score || 0);
+  const creatorFollowerCount = Number(item.creator_follower_count || 0);
 
   const card = document.createElement("div");
   card.className = "side-result-card";
@@ -2598,6 +2730,15 @@ function createSideResultCard(item) {
   card.dataset.postUrl = url;
   card.dataset.previewMode = previewMode;
   card.dataset.embedUrl = backendEmbedUrl;
+
+  card.dataset.likeCount = item.like_count || 0;
+  card.dataset.commentCount = item.comment_count || 0;
+  card.dataset.viewCount = item.view_count || 0;
+  card.dataset.engagementScore = item.engagement_score || 0;
+  card.dataset.normalizedEngagementScore = item.normalized_engagement_score || 0;
+  card.dataset.creatorProfileName = item.creator_profile_name || "";
+  card.dataset.creatorFollowerCount = item.creator_follower_count || 0;
+  card.dataset.creatorPostCount = item.creator_post_count || 0;
 
   const isInstagram = platform === "instagram" && url && url.includes("instagram.com");
   const canonicalPostUrl = isInstagram ? canonicalInstagramPostUrlForSidePanel(url) : url;
@@ -2661,16 +2802,51 @@ function createSideResultCard(item) {
   const meta = document.createElement("div");
   meta.className = "side-result-meta";
 
+
   const title = document.createElement("div");
   title.className = "side-result-title";
-  title.textContent = (item.title || url || "Untitled post").trim();
+  title.textContent = item.title || url;
 
   const subtitle = document.createElement("div");
   subtitle.className = "side-result-subtitle";
-  subtitle.textContent = `${item.account_handle || platform || "post"}${tag ? ` • ${tag}` : ""}`;
+  const creatorLabel = item.creator_profile_name || item.account_handle || "unknown";
+  subtitle.textContent = `${creatorLabel} • ${tag || platform}`;
+
+  const intel = document.createElement("div");
+  intel.className = "side-result-intel";
+
+  const likes = Number(item.like_count || 0);
+  const comments = Number(item.comment_count || 0);
+  const views = Number(item.view_count || 0);
+  const rawScore = Number(item.engagement_score || 0);
+  const normalizedScore = Number(item.normalized_engagement_score || 0);
+  const creatorFollowers = Number(item.creator_follower_count || 0);
+
+  if (creatorFollowers > 0) {
+    intel.appendChild(createIntelBadge(`👤 ${compactNumber(creatorFollowers)}`, "creator"));
+  }
+
+  if (likes > 0) {
+    intel.appendChild(createIntelBadge(`❤️ ${compactNumber(likes)}`));
+  }
+
+  if (comments > 0) {
+    intel.appendChild(createIntelBadge(`💬 ${compactNumber(comments)}`));
+  }
+
+  if (views > 0) {
+    intel.appendChild(createIntelBadge(`👁 ${compactNumber(views)}`));
+  }
+
+  if (normalizedScore > 0) {
+    intel.appendChild(createIntelBadge(`⚡ ${compactPercent(normalizedScore)}`, "hot"));
+  } else if (rawScore > 0) {
+    intel.appendChild(createIntelBadge(`⚡ ${compactNumber(rawScore)}`, "score"));
+  }
 
   meta.appendChild(title);
   meta.appendChild(subtitle);
+  
 
   const actions = document.createElement("div");
   actions.className = "side-result-actions";
@@ -2678,7 +2854,7 @@ function createSideResultCard(item) {
   const openBtn = document.createElement("button");
   openBtn.type = "button";
   openBtn.className = "icon-btn";
-  openBtn.textContent = "Open";
+  openBtn.textontent = "Open";
   openBtn.addEventListener("click", (e) => {
     e.preventDefault();
     e.stopPropagation();
