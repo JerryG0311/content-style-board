@@ -480,13 +480,37 @@ def discover_instagram_accounts_playwright(query: str, limit: int = 20) -> list[
     return discovered[:limit]
 
 
-def fetch_instagram_posts_playwright(handle: str, max_posts: int = 12):
+def instagram_post_url_exists(post_url: str) -> bool:
+    """
+    Check whether a post URL already exists in the local posts table.
+    Kept local/lazy to avoid importing the app DB layer unless crawling is running.
+    """
+    post_url = (post_url or "").strip()
+    if not post_url:
+        return False
+
+    try:
+        from .app import get_db
+
+        with get_db() as conn:
+            row = conn.execute(
+                "SELECT id FROM posts WHERE post_url = ? LIMIT 1",
+                (post_url,),
+            ).fetchone()
+
+        return row is not None
+    except Exception:
+        return False
+
+def fetch_instagram_posts_playwright(handle: str, max_posts: int = 12, existing_stop_threshold: int = 8):
     handle = (handle or "").strip().lstrip("@") 
     if not handle:
         return []
     
     url = f"https://www.instagram.com/{handle}/"
     posts = []
+    consecutive_existing_posts = 0
+    existing_stop_threshold = int(existing_stop_threshold or 8)
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -520,6 +544,24 @@ def fetch_instagram_posts_playwright(handle: str, max_posts: int = 12):
                 continue
             if not "/p/" in full_url and "/reel/" not in full_url:
                 continue
+            if instagram_post_url_exists(full_url):
+                consecutive_existing_posts += 1
+                print(
+                    f"[CRAWL EARLY STOP CHECK] Existing post "
+                    f"{consecutive_existing_posts}/{existing_stop_threshold}: {full_url}"
+                )
+
+                if consecutive_existing_posts >= existing_stop_threshold:
+                    print(
+                        f"[CRAWL EARLY STOP] @{handle}: reached "
+                        f"{consecutive_existing_posts} existing posts in a row."
+                    )
+                    break
+
+                continue
+
+            consecutive_existing_posts = 0
+
             if full_url not in posts:
                 posts.append(full_url)
             if len(posts) >= max_posts:
