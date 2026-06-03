@@ -28,6 +28,13 @@ JOB_DISCOVER_ACCOUNTS_FOR_NICHE = "discover_accounts_for_niche"
 JOB_CRAWL_INSTAGRAM_ACCOUNT = "crawl_instagram_account"
 JOB_CLASSIFY_REEL_VIDEO = "classify_reel_video"
 JOB_EXPAND_NICHE = "expand_niche"
+JOB_ENRICH_MISSING_POST_METRICS = "enrich_missing_post_metrics"
+
+# Queue names for different job types
+QUEUE_EXPAND_JOBS = "content_expand_jobs"
+QUEUE_CRAWL_JOBS = "content_crawl_jobs"
+QUEUE_CLASSIFY_JOBS = "content_classify_jobs"
+QUEUE_ENRICH_JOBS = "content_enrich_jobs"
 
 
 def create_crawl_job(job_type: str, target: str, status: str = "queued") -> dict:
@@ -224,6 +231,90 @@ def queue_expand_niche_job_if_needed(
         "cooldown_minutes": cooldown_minutes,
     }
 
+def has_recent_or_active_enrichment_job(
+        platform: str = "instagram",
+        cooldown_minutes: int = 60,
+) -> bool:
+    platform = (platform or "instagram").strip().lower()
+    target = f"{platform}:missing_post_metrics"
+    cutoff = (
+        datetime.now(timezone.utc)
+        - timedelta(minutes=cooldown_minutes)
+    ).isoformat()
+
+    with get_db() as conn:
+        row = conn.execute(
+            """
+            SELECT id
+            FROM crawl_jobs
+            WHERE job_type = ?
+                AND target = ?
+                AND (
+                        status IN ('queued', 'processing', 'running')
+                    )
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (
+                JOB_ENRICH_MISSING_POST_METRICS,
+                target,
+                cutoff,
+            ),
+        ).fetchone()
+    
+    return row is not None
+
+def queue_enrich_missing_post_metrics_job_if_needed(
+        platform: str = "instagram",
+        limit: int = 25,
+        cooldown_minutes: int = 60,
+) -> dict:
+    platform = (platform or "instagram").strip().lower()
+    limit = int(limit or 25)
+
+    if has_recent_or_active_enrichment_job(
+        platform=platform,
+        cooldown_minutes=cooldown_minutes,
+    ):
+        return {
+            "queued": False, 
+            "reason": "recent_or_active_enrichment_job_exists",
+            "platform": platform,
+            "limit": limit,
+            "cooldown_minutes": cooldown_minutes,
+        }
+    
+    job = queue_enrich_missing_post_metrics_job(
+        platform=platform,
+        limit=limit,
+    )
+
+    return {
+        "queued": True,
+        "reason": "enrich_missing_post_metrics_job_queued",
+        "job": job,
+        "platform": platform,
+        "limit": limit,
+        "cooldown_minutes": cooldown_minutes,
+    }
+
+def get_queue_name_for_job_type(job_type: str) -> str:
+    job_type = (job_type or "").strip()
+
+    if job_type == JOB_EXPAND_NICHE:
+        return QUEUE_EXPAND_JOBS
+
+    if job_type == JOB_CRAWL_INSTAGRAM_ACCOUNT:
+        return QUEUE_CRAWL_JOBS
+
+    if job_type == JOB_CLASSIFY_REEL_VIDEO:
+        return QUEUE_CLASSIFY_JOBS
+
+    if job_type == JOB_ENRICH_MISSING_POST_METRICS:
+        return QUEUE_ENRICH_JOBS
+
+    return "content_jobs"
+
 def publish_rabbitmq_job(job_type: str, target: str, payload: Optional[dict] = None) -> None:
     """
     Publish a durable job message to RabbitMQ.
@@ -239,9 +330,10 @@ def publish_rabbitmq_job(job_type: str, target: str, payload: Optional[dict] = N
         ) from e
 
     params = pika.URLParameters(rabbitmq_url)
+    queue_name = get_queue_name_for_job_type(job_type)
     connection = pika.BlockingConnection(params)
     channel = connection.channel()
-    channel.queue_declare(queue="content_jobs", durable=True)
+    channel.queue_declare(queue=queue_name, durable=True)
 
     body = json.dumps(
         {
@@ -254,7 +346,7 @@ def publish_rabbitmq_job(job_type: str, target: str, payload: Optional[dict] = N
 
     channel.basic_publish(
         exchange="",
-        routing_key="content_jobs",
+        routing_key=queue_name,
         body=body,
         properties=pika.BasicProperties(delivery_mode=2),
     )
@@ -299,6 +391,41 @@ def queue_expand_niche_job(
 
     publish_rabbitmq_job(
         job_type=JOB_EXPAND_NICHE,
+        target=target,
+        payload={
+            **payload,
+            "job_id": job.get("id"),
+        },
+    )
+
+    return job
+
+def queue_enrich_missing_post_metrics_job(
+    platform: str = "instagram",
+    limit: int = 25,
+) -> dict:
+    """
+    Create and publish a background job that backfills engagement metrics
+    for existing posts missing likes/comments/views/engagement metadata.
+    """
+    platform = (platform or "instagram").strip().lower()
+    limit = int(limit or 25)
+
+    target = f"{platform}:missing_post_metrics"
+
+    payload = {
+        "platform": platform,
+        "limit": limit,
+    }
+
+    job = create_crawl_job(
+        job_type=JOB_ENRICH_MISSING_POST_METRICS,
+        target=target,
+        status="queued",
+    )
+
+    publish_rabbitmq_job(
+        job_type=JOB_ENRICH_MISSING_POST_METRICS,
         target=target,
         payload={
             **payload,

@@ -321,6 +321,164 @@ def fetch_instagram_profile_metrics_playwright(handle: str) -> dict:
             "following_count": 0,
             "post_count": 0,
         }
+    
+def discover_instagram_accounts_playwright(query: str, limit: int = 20) -> list[dict]:
+    """
+    Discover Instagram accounts using the rendered Instagram search UI instead of
+    the brittle /web/search/topsearch JSON endpoint.
+    """
+    query = (query or "").strip()
+    limit = int(limit or 20)
+    limit = max(1, min(limit, 50))
+
+    if not query:
+        return []
+    
+    discovered = []
+    seen_handles = set()
+
+    blocked_handles = {
+        "accounts",
+        "about",
+        "api",
+        "blog",
+        "business",
+        "challenge",
+        "developer",
+        "directory",
+        "explore",
+        "legal",
+        "p",
+        "press",
+        "privacy",
+        "reel",
+        "reels",
+        "stories",
+        "terms",
+    }
+
+    def add_handle_from_href(href: str):
+        href = (href or "").strip()
+        if not href:
+            return
+        
+        match = re.search(r"instagram\.com/([^/?#]+)/?", href)
+        if not match:
+            return 
+        
+        handle = (match.group(1) or "").strip().lstrip("@").lower()
+        if not handle:
+            return 
+        if handle in blocked_handles:
+            return
+        
+        if len(handle) < 2 or len(handle) > 30:
+            return 
+        
+        if not re.match(r"^[a-z0-9._]+$", handle):
+            return
+        
+        if handle in seen_handles:
+            return
+        
+        seen_handles.add(handle)
+
+        discovered.append(
+            {
+                "handle": handle,
+                "username": handle,
+                "full_name": "",
+                "bio": "",
+                "source": "instagram_playwright_search",
+                "query": query,
+            }
+        )
+    
+    search_urls = [
+        f"https://www.instagram.com/explore/search/keyword/?q={query.replace(' ', '%20')}",
+        f"https://www.instagram.com/explore/search/accounts/?q={query.replace(' ', '%20')}",
+    ]
+
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+
+            context = browser.new_context(
+                viewport={"width": 1280, "height": 1600}
+            )
+
+            context.add_cookies(instagram_cookie_list())
+
+            page = context.new_page()
+
+            for search_url in search_urls:
+                if len(discovered) >= limit:
+                    break
+
+                try:
+                    print(f"[PLAYWRIGHT DISCOVERY] Searching Instagram UI: {query}")
+
+                    page.goto(
+                        search_url,
+                        wait_until="domcontentloaded",
+                        timeout=45000,
+                    )
+
+                    page.wait_for_timeout(3500)
+
+                    try:
+                        search_input = page.locator(
+                            "input[placeholder*='Search'], input[aria-label*='Search'], input[placeholder*='search'], input[aria-label*='search']"
+                        ).first
+
+                        if search_input.count() > 0:
+                            search_input.click(timeout=3000)
+                            search_input.fill(query, timeout=5000)
+                            page.wait_for_timeout(3500)
+                        
+                    except Exception:
+                        pass
+
+                    for _ in range(3):
+                        links = page.locator(
+                            "a[href^='/'], a[href*='instagram.com/']"
+                        )
+
+                        count = min(links.count(), 200)
+
+                        for i in range(count):
+                            if len(discovered) >= limit:
+                                break
+
+                            try:
+                                href = links.nth(i).get_attribute("href") or ""
+
+                                if href.startswith("/"):
+                                    href = f"https://www.instagram.com{href}"
+                                
+                                add_handle_from_href(href)
+                            
+                            except Exception:
+                                continue
+                        
+                        if len(discovered) >= limit:
+                            break
+
+                        page.mouse.wheel(0, 1800)
+                        page.wait_for_timeout(1500)
+                
+                except Exception as e:
+                    print(f"[PLAYWRIGHT DISCOVERY ERROR] {query}: {e}")
+                    continue
+            context.close()
+            browser.close()
+    
+    except Exception as e:
+        print(f"[PLAYWRIGHT DISCOVERY ERROR] Browser failed for {query}: {e}")
+        return []
+    
+    return discovered[:limit]
+
 
 def fetch_instagram_posts_playwright(handle: str, max_posts: int = 12):
     handle = (handle or "").strip().lstrip("@") 

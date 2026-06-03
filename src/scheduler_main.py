@@ -1,7 +1,7 @@
 import random
 import time
 
-from src.jobs import queue_expand_niche_job_if_needed
+from src.jobs import get_db, queue_expand_niche_job_if_needed
 
 # Core niches to constantly expand and refresh
 SCHEDULED_NICHES = [
@@ -102,14 +102,40 @@ STYLES = [
 ]
 
 REFRESH_INTERVAL_SECONDS = 60 * 30  # every 30 minutes
-MAX_JOBS_PER_CYCLE = 20
-MIN_DELAY_BETWEEN_JOBS = 4
-MAX_DELAY_BETWEEN_JOBS = 12
+MAX_JOBS_PER_CYCLE = 12
+MAX_PENDING_JOBS = 75
+MIN_DELAY_BETWEEN_JOBS = 8
+MAX_DELAY_BETWEEN_JOBS = 20
+
+def get_pending_job_count() -> int:
+    with get_db() as conn:
+        row = conn.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM crawl_jobs
+            WHERE status IN ('queued', 'processing', 'running')
+            """
+        ).fetchone()
+    
+    return int(row["count"] or 0)
 
 def run_scheduler():
     print("Scheduler started...")
 
     while True:
+        pending_jobs = get_pending_job_count()
+
+        print(f"[SCHEDULER] Pending jobs: {pending_jobs}")
+
+        if pending_jobs >= MAX_PENDING_JOBS:
+            print(
+                f"[SCHEDULER] Backlog too high ({pending_jobs} pending). "
+                f"Sleeping for {REFRESH_INTERVAL_SECONDS} seconds..."
+            )
+
+            time.sleep(REFRESH_INTERVAL_SECONDS)
+            continue
+
         queued_count = 0
 
         shuffled_niches = list(SCHEDULED_NICHES)

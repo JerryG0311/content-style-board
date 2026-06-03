@@ -1549,13 +1549,28 @@
               <select id="styleSelect"></select>
 
               <div class="search-panel-controls">
-                <div class="search-panel-controls-label">Posts</div>
-                <select id="resultCountSelect" class="search-panel-count-select">
-                  <option value="10">10</option>
-                  <option value="20" selected>20</option>
-                  <option value="30">30</option>
-                  <option value="50">50</option>
-                </select>
+                <div>
+                  <div class="search-panel-controls-label">Posts</div>
+                  <select id="resultCountSelect" class="search-panel-count-select">
+                    <option value="10">10</option>
+                    <option value="20" selected>20</option>
+                    <option value="30">30</option>
+                    <option value="50">50</option>
+                  </select>
+                </div>
+
+                <div>
+                  <div class="search-panel-controls-label">Sort</div>
+                  <select id="resultSortSelect" class="search-panel-count-select">
+                    <option value="default" selected>Default</option>
+                    <option value="engagement">Engagement</option>
+                    <option value="normalized">Normalized</option>
+                    <option value="followers">Followers</option>
+                    <option value="likes">Likes</option>
+                    <option value="comments">Comments</option>
+                    <option value="views">Views</option>
+                  </select>
+                </div>
               </div>
 
               <button id="panelSearchBtn" class="primary-btn" type="button">
@@ -1681,6 +1696,7 @@
   const nicheInput = document.getElementById("nicheInput");
   const seedInput = document.getElementById("seedInput");
   const resultCountSelect = document.getElementById("resultCountSelect");
+  const resultSortSelect = document.getElementById("resultSortSelect");
   const analysisPanelBody = document.getElementById("analysisPanelBody");
   const analysisPanel = document.getElementById("analysisPanel");
   const searchResultsStatus = document.getElementById("searchResultsStatus");
@@ -1837,6 +1853,31 @@
     if (badges.children.length) {
       meta.appendChild(badges);
     }
+  }
+
+  function sortSearchResults(results) {
+    const sortMode = resultSortSelect ? resultSortSelect.value : "default";
+    const sorted = Array.isArray(results) ? [...results] : [];
+
+    function num(item, key) {
+      return Number(item?.[key] || 0);
+    }
+
+    if (sortMode === "engagement") {
+      sorted.sort((a, b) => num(b, "engagement_score") - num(a, "engagement_score"));
+    } else if (sortMode === "normalized") {
+      sorted.sort((a, b) => num(b, "normalized_engagement_score") - num(a, "normalized_engagement_score"));
+    } else if (sortMode === "followers") {
+      sorted.sort((a, b) => num(b, "creator_follower_count") - num(a, "creator_follower_count"));
+    } else if (sortMode === "likes") {
+      sorted.sort((a, b) => num(b, "like_count") - num(a, "like_count"));
+    } else if (sortMode === "comments") {
+      sorted.sort((a, b) => num(b, "comment_count") - num(a, "comment_count"));
+    } else if (sortMode === "views") {
+      sorted.sort((a, b) => num(b, "view_count") - num(a, "view_count"));
+    }
+
+    return sorted;
   }
 
   function applyViewport() {
@@ -2683,7 +2724,9 @@ function renderSidePanelResults(results, emptyMessage = "No saved results for th
     return;
   }
 
-  for (const item of results) {
+  const sortedResults = sortSearchResults(results);
+
+  for (const item of sortedResults) {
     const card = createSideResultCard(item);
     const cardMeta = card.querySelector(".side-result-meta");
     
@@ -3851,6 +3894,11 @@ function openSidePanel(panelName) {
       },
       true
     );
+  }
+  if (resultSortSelect) {
+    resultSortSelect.addEventListener("change", () => {
+      renderSidePanelResults(currentSearchResults);
+    });
   }
 </script>
 

@@ -1,10 +1,14 @@
 import os
+import time
 import re
 from urllib.parse import quote
 
 import requests
 
 from .jobs import get_db
+
+INSTAGRAM_DISCOVERY_COOLDOWN_UNTIL = 0.0
+INSTAGRAM_DISCOVERY_COOLDOWN_SECONDS = 60 * 20
 
 def normalize_instagram_handle(raw_handle: str) -> str:
     """
@@ -175,6 +179,40 @@ def build_instagram_discovery_headers(query: str = "") -> tuple[dict, dict]:
         if value:
             cookies[cookie_name] = value
     return headers, cookies
+
+
+# Helper to log non-JSON Instagram responses
+def log_instagram_non_json_response(response: requests.Response, query: str, endpoint: str) -> None:
+    """
+    Log enough context to diagnose when Instagram returns HTML, login pages,
+    challenges, rate limits, or other non-JSON responses.
+    """
+    content_type = response.headers.get("content-type", "")
+    location = response.headers.get("location", "")
+    preview = (response.text or "")[:500].replace("\n", " ").strip()
+
+    print("[DISCOVERY ERROR] Non-JSON response from Instagram")
+    print(f"[DISCOVERY ERROR] Query: {query}")
+    print(f"[DISCOVERY ERROR] Status: {response.status_code}")
+    print(f"[DISCOVERY ERROR] Content-Type: {content_type}")
+    if location:
+        print(f"[DISCOVERY ERROR] Redirect Location: {location}")
+    print(f"[DISCOVERY ERROR] Endpoint: {endpoint}")
+    print(f"[DISCOVERY ERROR] Preview: {preview}")
+
+
+# Cooldown helpers for Instagram discovery
+def instagram_discovery_is_in_cooldown() -> bool:
+    return time.time() < INSTAGRAM_DISCOVERY_COOLDOWN_UNTIL
+
+
+def start_instagram_discovery_cooldown(reason: str = "non_json_response") -> None:
+    global INSTAGRAM_DISCOVERY_COOLDOWN_UNTIL
+    INSTAGRAM_DISCOVERY_COOLDOWN_UNTIL = time.time() + INSTAGRAM_DISCOVERY_COOLDOWN_SECONDS
+    print(
+        f"[DISCOVERY COOLDOWN] Pausing Instagram discovery for "
+        f"{INSTAGRAM_DISCOVERY_COOLDOWN_SECONDS} seconds. Reason: {reason}"
+    )
 
 def build_niche_signal_terms(niche: str) -> list[str]:
     niche = (niche or "").lower().strip()
@@ -420,6 +458,9 @@ def fetch_instagram_topsearch_accounts(query: str, limit: int = 10) -> list[dict
     limit = int(limit or 10)
     if not query:
         return []
+    if instagram_discovery_is_in_cooldown():
+        print(f"[DISCOVERY COOLDOWN] Skipping query during cooldown: {query}")
+        return []
     
     headers, cookies = build_instagram_discovery_headers(query=query)
     endpoint =  f"https://www.instagram.com/web/search/topsearch/?context=blended&query={quote(query)}&count={max(limit, 10)}"
@@ -431,12 +472,24 @@ def fetch_instagram_topsearch_accounts(query: str, limit: int = 10) -> list[dict
             timeout=20,
             allow_redirects=True,
         )
+        if r.status_code in (401, 403, 429):
+            log_instagram_non_json_response(r, query=query, endpoint=endpoint)
+            start_instagram_discovery_cooldown(reason=f"status_{r.status_code}")
+            return []
+
         r.raise_for_status()
+
+        content_type = (r.headers.get("content-type") or "").lower()
+        if "json" not in content_type:
+            log_instagram_non_json_response(r, query=query, endpoint=endpoint)
+            start_instagram_discovery_cooldown(reason="non_json_content_type")
+            return []
 
         try:
             data = r.json()
         except Exception:
-            print("[DISCOVERY ERROR] Non-JSON response from Instagram:", r.text[:300])
+            log_instagram_non_json_response(r, query=query, endpoint=endpoint)
+            start_instagram_discovery_cooldown(reason="json_parse_failed")
             return []
 
     except Exception as e:
@@ -471,6 +524,46 @@ def fetch_instagram_topsearch_accounts(query: str, limit: int = 10) -> list[dict
         )
 
     return dedupe_discovered_accounts(out)[:limit]
+
+def fetch_instagram_accounts_with_fallback(query: str, limit: int = 10) -> list[dict]:
+    """
+    Try Instagram topsearch first. If it returns nothing because Instagram served
+    HTML/non-JSON or discovery is cooling down, fallback to Playwright UI search.
+    """
+    query = (query or "").strip()
+    limit = int(limit or 10)
+
+    if not query:
+        return []
+    
+    accounts = fetch_instagram_topsearch_accounts(
+        query=query,
+        limit=limit,
+    )
+
+    if accounts:
+        return accounts
+    
+    try:
+        from .playwright_helper import discover_instagram_accounts_playwright
+
+        print(f"[DISCOVERY FALLBACK] Trying playwright discovery for query: {query}")
+
+        fallback_accounts = discover_instagram_accounts_playwright(
+            query=query,
+            limit=limit,
+        )
+
+        print(
+            f"[DISCOVERY FALLBACK] Playwright found "
+            f"{len(fallback_accounts)} accounts for query: {query}"
+        )
+
+        return dedupe_discovered_accounts(fallback_accounts)[:limit]
+    
+    except Exception as e:
+        print(f"[DISCOVERY FALLBACK ERROR] {query} {e}")
+        return []
     
 
 def discover_instagram_accounts_for_niche(niche: str, limit: int = 10) -> list[dict]:
@@ -497,7 +590,8 @@ def discover_instagram_accounts_for_niche(niche: str, limit: int = 10) -> list[d
 
     raw_accounts = []
     for query in queries:
-        raw_accounts.extend(fetch_instagram_topsearch_accounts(query=query, limit=per_query_limit))
+        raw_accounts.extend(fetch_instagram_accounts_with_fallback(query=query, limit=per_query_limit))
+        time.sleep(1.5)
 
     print(f"[DISCOVERY] Queries used: {len(queries)}")
     print(f"[DISCOVERY] Raw accounts count: {len(raw_accounts)}")
@@ -597,8 +691,9 @@ def expand_accounts_from_seed(platform: str, niche: str, limit: int = 20) -> lis
     raw_accounts = []
     for handle in seed_handles:
         raw_accounts.extend(
-            fetch_instagram_topsearch_accounts(query=handle, limit=max(10, min(limit, 25)))
+            fetch_instagram_accounts_with_fallback(query=handle, limit=max(10, min(limit, 25)))
         )
+        time.sleep(1.5)
     print(f"[EXPANSION] Raw expanded accounts: {len(raw_accounts)}")
 
     deduped = dedupe_discovered_accounts(raw_accounts)
@@ -635,6 +730,6 @@ def expand_accounts_from_seed(platform: str, niche: str, limit: int = 20) -> lis
     print(f"[EXPANSION] New accounts found: {len(fresh)}")
     
     dup_count = sum(1 for a in filtered if a.get("near_duplicate_handle"))
-    print(f"[EPANSION] Marked {dup_count} near-duplicate accounts (not removed)")
+    print(f"[EXPANSION] Marked {dup_count} near-duplicate accounts (not removed)")
 
     return filtered[:limit]
