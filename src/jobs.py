@@ -434,3 +434,89 @@ def queue_enrich_missing_post_metrics_job(
     )
 
     return job
+
+
+def queue_classify_reel_video_job(
+    post_url: str,
+    fps: float = 1.0,
+) -> dict:
+    """
+    Create and publish a background job that classifies one Instagram reel.
+    """
+    post_url = (post_url or "").strip()
+
+    if not post_url:
+        raise ValueError("post_url is required")
+
+    job = create_crawl_job(
+        job_type=JOB_CLASSIFY_REEL_VIDEO,
+        target=post_url,
+        status="queued",
+    )
+
+    publish_rabbitmq_job(
+        job_type=JOB_CLASSIFY_REEL_VIDEO,
+        target=post_url,
+        payload={
+            "job_id": job.get("id"),
+            "post_url": post_url,
+            "fps": float(fps or 1.0),
+        },
+    )
+
+    return job
+
+
+def queue_missing_reel_classification_jobs(
+    limit: int = 25,
+    fps: float = 1.0,
+) -> dict:
+    """
+    Queue classification jobs for reels that have not been visually classified yet.
+    """
+    limit = int(limit or 25)
+    limit = max(1, min(limit, 100))
+
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT p.post_url
+            FROM posts p
+            WHERE p.post_type = 'reel'
+              AND p.post_url != ''
+              AND COALESCE(p.classified_post_type, '') = ''
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM crawl_jobs cj
+                  WHERE cj.job_type = ?
+                    AND cj.target = p.post_url
+                    AND cj.status IN ('queued', 'processing', 'running')
+              )
+            ORDER BY p.collected_at DESC, p.id DESC
+            LIMIT ?
+            """,
+            (JOB_CLASSIFY_REEL_VIDEO, limit),
+        ).fetchall()
+
+    queued = 0
+
+    for row in rows:
+        post_url = (row["post_url"] or "").strip()
+        if not post_url:
+            continue
+
+        queue_classify_reel_video_job(
+            post_url=post_url,
+            fps=fps,
+        )
+
+        queued += 1
+        print(f"[CLASSIFY QUEUE] Queued reel classification: {post_url}")
+
+    return {
+        "ok": True,
+        "found": len(rows),
+        "queued": queued,
+        "limit": limit,
+        "fps": fps,
+    }

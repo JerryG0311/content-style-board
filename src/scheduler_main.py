@@ -1,7 +1,11 @@
 import random
 import time
 
-from src.jobs import get_db, queue_expand_niche_job_if_needed
+from src.jobs import (
+    get_db,
+    queue_expand_niche_job_if_needed,
+    queue_missing_reel_classification_jobs,
+)
 
 # Core niches to constantly expand and refresh
 SCHEDULED_NICHES = [
@@ -104,6 +108,7 @@ STYLES = [
 REFRESH_INTERVAL_SECONDS = 60 * 30  # every 30 minutes
 MAX_JOBS_PER_CYCLE = 12
 MAX_PENDING_JOBS = 75
+CLASSIFICATION_JOBS_PER_CYCLE = 25
 MIN_DELAY_BETWEEN_JOBS = 8
 MAX_DELAY_BETWEEN_JOBS = 20
 
@@ -119,6 +124,26 @@ def get_pending_job_count() -> int:
     
     return int(row["count"] or 0)
 
+def queue_classification_jobs_for_cycle() -> None:
+    try:
+        print(
+            f"[SCHEDULER] Queueing up to "
+            f"{CLASSIFICATION_JOBS_PER_CYCLE} reel classification jobs..."
+        )
+
+        classification_result = queue_missing_reel_classification_jobs(
+            limit=CLASSIFICATION_JOBS_PER_CYCLE,
+            fps=1.0,
+        )
+
+        print(
+            f"[SCHEDULER] Classification queue result: "
+            f"{classification_result}"
+        )
+
+    except Exception as e:
+        print(f"[SCHEDULER CLASSIFICATION ERROR] {e}")
+
 def run_scheduler():
     print("Scheduler started...")
 
@@ -126,6 +151,8 @@ def run_scheduler():
         pending_jobs = get_pending_job_count()
 
         print(f"[SCHEDULER] Pending jobs: {pending_jobs}")
+
+        queue_classification_jobs_for_cycle()
 
         if pending_jobs >= MAX_PENDING_JOBS:
             print(
