@@ -3,7 +3,7 @@ import traceback
 from ..app import (
     download_instagram_reel_video,
     extract_frames_from_video,
-    analyze_frames_with_ai,
+    analyze_frames_locally,
     classify_reel_from_visual_signals,
     update_post_classification_by_url,
 )
@@ -42,7 +42,7 @@ def handle_classify_reel_video_job(payload: dict):
     try:
         video_path = download_instagram_reel_video(post_url)
         frame_paths = extract_frames_from_video(video_path, fps=fps)
-        frame_analysis = analyze_frames_with_ai(frame_paths)
+        frame_analysis = analyze_frames_locally(frame_paths)
         classified_post_type, classifier_confidence, classifier_version = classify_reel_from_visual_signals(
             text_density=frame_analysis.get("text_density", 0.0),
             scene_change_score=frame_analysis.get("scene_change_score", 0.0),
@@ -56,7 +56,7 @@ def handle_classify_reel_video_job(payload: dict):
                 post_url=post_url,
                 classified_post_type=classified_post_type,
                 classifier_confidence=classifier_confidence,
-                classifier_version=f"{classifier_version}:openai_frames_v1",
+                classifier_version=f"{classifier_version}:local_opencv_v1",
             )
         
         if job_id:
@@ -70,16 +70,22 @@ def handle_classify_reel_video_job(payload: dict):
     
     except Exception as e:
         retried = False
+        error_message = str(e)
+        non_retryable_error = (
+            "OPENAI_QUOTA_EXHAUSTED" in error_message
+            or "INSTAGRAM_VIDEO_AUTH_REQUIRED" in error_message
+        )
+        should_retry = not non_retryable_error
 
         if job_id:
             current_job = get_crawl_job(job_id)
             retry_count = int(current_job.get("retry_count") or 0)
-            if retry_count < max_retries:
+            if should_retry and retry_count < max_retries:
                 updated_job = increment_crawl_job_retry(job_id)
                 update_crawl_job_status(
                     job_id=job_id,
                     status="queued",
-                    error_message=str(e),
+                    error_message=error_message,
                     finished_at=utc_now_iso(),
                 )
                 retry_payload = dict(payload)
@@ -94,13 +100,20 @@ def handle_classify_reel_video_job(payload: dict):
                     f"Retrying job {job_id} for {post_url} "
                     f"({int(updated_job.get('retry_count') or 0)}/{max_retries})"
                 )
-            else:
+            else:   
                 update_crawl_job_status(
                     job_id=job_id,
                     status="failed",
-                    error_message=str(e),
+                    error_message=error_message,
                     finished_at=utc_now_iso(),
                 )
+
+                if non_retryable_error:
+                    print(
+                        "Non-retryable classification error. Job marked failed "
+                        "without retry. Fix Instagram yt-dlp auth "
+                        "before restarting classifier."
+                    )
         print(f"Worker failed for {post_url}")
         print(e)
         if retried:

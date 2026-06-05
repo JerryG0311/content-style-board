@@ -17,6 +17,7 @@ import time
 import re
 import sqlite3
 import subprocess
+import math
 
 
 from fastapi import Response
@@ -4343,15 +4344,13 @@ def classify_reel_from_visual_signals(
         sampled_frames: int,
 ) -> tuple[str, float, str]:
     """
-    First real visual-classification decision layer.
+    Visual-classification decision layer.
 
-    IMPORTANT:
-    This function does NOT generate the visual signals itself.
-    It expects the frontend/browser to inspect the actual rendered embed
-    and POST the measured signals back to this backend.
-
-    That keeps the classifier grounded in the same post content the user sees
-    on the board, instead of relying on weak metadata or fallback preview guesses.
+    This function receives measured visual signals and always tries to return
+    one of the supported reel subtypes:
+    - talking-head
+    - multi-clip
+    - single-clip
     """
 
     td = max(0.0, min(1.0, float(text_density or 0.0)))
@@ -4359,24 +4358,40 @@ def classify_reel_from_visual_signals(
     fr = max(0.0, min(1.0, float(face_ratio or 0.0)))
     sampled = max(0, int(sampled_frames or 0))
     has_face = bool(has_large_face)
+    version = "rendered_embed_visual_v2"
 
-    # Talking-head reels can still have a lot of on-screen text/captions.
-    # So we should not reject them just because text_density is high.
-    if has_face and fr >= 0.18 and sc <= 0.35:
-        confidence = min(0.95, 0.70 + (fr * 0.35) - (sc * 0.10))
-        return ("talking-head", float(max(0.0, confidence)), "rendered_embed_visual_v1")
-    
-    # Multi-clip text reels should show BOTH scene churn and persistent text overlays.
-    # This prevents generic montage/video ads from being mislabeled as list-style reels.
-    if sampled >= 3 and sc >= 0.45 and td >= 0.12:
-        confidence = min(0.95, 0.62 + (sc * 0.20) + (td * 0.20))
-        return ("multi-clip", float(max(0.0, confidence)), "rendered_embed_visual_v1")
-    
-    if td >= 0.18 and sc <= 0.30 and (not has_face or fr < 0.18):
-        confidence = min(0.92, 0.62 + (td * 0.35) - (sc * 0.10))
-        return ("single-clip", float(max(0.0, confidence)), "rendered_embed_visual_v1")
-    
-    return ("", 0.0, "")
+    if sampled <= 0:
+        return ("single-clip", 0.35, version)
+
+    # Strong talking-head signal: a face is present and visually dominant.
+    if has_face and fr >= 0.12 and sc <= 0.42:
+        confidence = min(0.95, 0.68 + (fr * 0.45) - (sc * 0.10))
+        return ("talking-head", float(max(0.50, confidence)), version)
+
+    # Softer talking-head signal: face detected, even if scene/text movement exists.
+    if has_face and fr >= 0.08 and sc <= 0.30:
+        confidence = min(0.88, 0.60 + (fr * 0.35) - (sc * 0.08))
+        return ("talking-head", float(max(0.50, confidence)), version)
+
+    # Multi-clip/montage signal: meaningful scene changes across sampled frames.
+    if sampled >= 3 and sc >= 0.24:
+        confidence = min(0.92, 0.58 + (sc * 0.55) + (td * 0.08))
+        return ("multi-clip", float(max(0.50, confidence)), version)
+
+    # Text-heavy continuous frame: likely a single-clip/text-overlay reel.
+    if td >= 0.10 and sc <= 0.35:
+        confidence = min(0.90, 0.58 + (td * 0.45) - (sc * 0.08))
+        return ("single-clip", float(max(0.50, confidence)), version)
+
+    # Low movement with no strong face: most likely a single continuous clip.
+    if sc < 0.24:
+        confidence = min(0.82, 0.55 + ((0.24 - sc) * 0.50))
+        return ("single-clip", float(max(0.45, confidence)), version)
+
+    # Final fallback: never leave a reel blank. If it is not clearly static,
+    # treat it as multi-clip with lower confidence.
+    confidence = min(0.78, 0.50 + (sc * 0.35))
+    return ("multi-clip", float(max(0.45, confidence)), version)
 
 def update_post_classification_by_url(
         post_url: str, 
@@ -4466,8 +4481,21 @@ def download_instagram_reel_video(post_url: str) -> str:
         "mp4",
         "-o",
         output_template,
-        post_url,
     ]
+
+    cookies_file = (os.getenv("YTDLP_COOKIES_FILE") or "").strip()
+    cookies_from_browser = (os.getenv("YTDLP_COOKIES_FROM_BROWSER") or "").strip()
+
+    if cookies_file:
+        cookie_path = Path(cookies_file).expanduser()
+        if cookie_path.exists():
+            cmd.extend(["--cookies", str(cookie_path)])
+        else:
+            print(f"[yt-dlp] Cookies file not found: {cookie_path}")
+    elif cookies_from_browser:
+        cmd.extend(["--cookies-from-browser", cookies_from_browser])
+
+    cmd.append(post_url)
 
     result = subprocess.run(
         cmd,
@@ -4476,9 +4504,23 @@ def download_instagram_reel_video(post_url: str) -> str:
         check=False,
     )
     if result.returncode != 0:
-        raise RuntimeError(
-            f"yt-dlp failed: {(result.stderr or result.stdout or '').strip()}"
+        error_text = (result.stderr or result.stdout or "").strip()
+        auth_blocked = (
+            "login required" in error_text.lower()
+            or "rate-limit reached" in error_text.lower()
+            or "requested content is not available" in error_text.lower()
+            or "main webpage is locked behind the login page" in error_text.lower()
         )
+
+        if auth_blocked:
+            raise RuntimeError(
+                "INSTAGRAM_VIDEO_AUTH_REQUIRED: yt-dlp could not download this reel. "
+                "Set YTDLP_COOKIES_FILE to a Netscape cookies.txt export, or set "
+                "YTDLP_COOKIES_FROM_BROWSER=chrome, then retry. "
+                f"Original error: {error_text}"
+            )
+
+        raise RuntimeError(f"yt-dlp failed: {error_text}")
 
     if not final_path.exists():
         raise RuntimeError(f"Expected merged video not found: {final_path}")
@@ -4631,6 +4673,152 @@ def api_debug_reel_frames(payload: ReelFramesPayload):
             status_code=400,
         )
 
+def analyze_frames_locally(frame_paths: list[str]) -> dict:
+    """
+    Cheap local reel analysis using OpenCV image signals.
+
+    Returns the same signal shape expected by classify_reel_from_visual_signals().
+    """
+    frame_paths = [str(p) for p in (frame_paths or []) if str(p or "").strip()]
+
+    if not frame_paths:
+        return {
+            "text_density": 0.0,
+            "scene_change_score": 0.0,
+            "face_ratio": 0.0,
+            "has_large_face": False, 
+            "sampled_frames": 0,
+            "analysis_source": "local_empty",
+        }
+    
+    try:
+        import cv2
+        import numpy as np
+    except Exception:
+        return {
+            "text_density": 0.0,
+            "scene_change_score": 0.0,
+            "face_ratio": 0.0,
+            "has_large_face": False,
+            "sampled_frames": len(frame_paths),
+            "analysis_source": "local_missing_opencv",
+        }
+    
+    gray_frames = []
+    face_ratios = []
+    text_density_values = []
+
+    face_cascade = None
+    try:
+        cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+        face_cascade = cv2.CascadeClassifier(cascade_path)
+        if face_cascade.empty():
+            face_cascade = None
+    except Exception:
+        face_cascade = None
+    
+    for frame_path in frame_paths:
+        try:
+            img = cv2.imread(frame_path)
+            if img is None:
+                continue
+
+            resized = cv2.resize(img, (320, 568))
+            gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
+            gray_frames.append(gray)
+
+            largest_face_ratio = 0.0
+
+            if face_cascade is not None:
+                faces = face_cascade.detectMultiScale(
+                    gray,
+                    scaleFactor=1.1,
+                    minNeighbors=4,
+                    minSize=(45, 45),
+                )
+
+                for (_, _, fw, fh) in faces:
+                    ratio = float(
+                        (fw * fh) / max(gray.shape[0] * gray.shape[1], 1)
+                    )
+                    largest_face_ratio = max(largest_face_ratio, ratio)
+            
+            face_ratios.append(largest_face_ratio)
+
+            edges = cv2.Canny(gray, 80, 160)
+
+            center_crop = edges[
+                int(edges.shape[0] * 0.08):int(edges.shape[0] * 0.82),
+                :
+            ]
+
+            edge_density = float(
+                np.count_nonzero(center_crop) / max(center_crop.size, 1)
+            )
+
+            text_density_values.append(
+                round(min(edge_density * 2.5, 1.0), 4)
+            )
+        
+        except Exception:
+            continue
+    
+    if not gray_frames:
+        return {
+            "text_density": 0.0,
+            "scene_change_score": 0.0,
+            "face_ratio": 0.0,
+            "has_large_face": False,
+            "sampled_frames": 0,
+            "analysis_source": "local_no_readable_frames",
+        }
+    
+    diffs = []
+
+    for idx in range(1, len(gray_frames)):
+        try:
+            prev = gray_frames[idx - 1]
+            cur = gray_frames[idx]
+            diff = cv2.absdiff(prev, cur)
+            diffs.append(float(np.mean(diff) / 255.0))
+        
+        except Exception:
+            continue
+    
+    scene_change_score = round(
+        float(sum(diffs) / len(diffs)) if diffs else 0.0,
+        4,
+    )
+
+    face_ratio = round(
+        float(max(face_ratios) if face_ratios else 0.0),
+        4,
+    )
+
+    avg_text_density = round(
+        float(sum(text_density_values) / len(text_density_values))
+        if text_density_values
+        else 0.0,
+        4,
+    )
+
+    large_face_frames = sum(1 for ratio in face_ratios if ratio >= 0.08)
+
+    has_large_face = large_face_frames >= max(
+        1,
+        math.ceil(len(face_ratios) * 0.35),
+    )
+
+    return {
+        "text_density": avg_text_density,
+        "scene_change_score": scene_change_score,
+        "face_ratio": face_ratio,
+        "has_large_face": bool(has_large_face),
+        "sampled_frames": len(gray_frames),
+        "analysis_source": "local_opencv_v1"
+    }
+
+
 
 def analyze_frames_with_ai(frame_paths: list[str]) -> dict:
     """
@@ -4693,8 +4881,23 @@ Guidelines:
     )
 
     if not response.ok:
+        error_text = (response.text or "").strip()
+        quota_exhausted = (
+            response.status_code == 429
+            and (
+                "insufficient_quota" in error_text
+                or "exceeded your current quota" in error_text.lower()
+            )
+        )
+
+        if quota_exhausted:
+            raise RuntimeError(
+                f"OPENAI_QUOTA_EXHAUSTED: OpenAI Responses API error "
+                f"{response.status_code}: {error_text}"
+            )
+
         raise RuntimeError(
-            f"OpenAI Responses API error {response.status_code}: {(response.text or '').strip()}"
+            f"OpenAI Responses API error {response.status_code}: {error_text}"
         )
     
     data = response.json()
