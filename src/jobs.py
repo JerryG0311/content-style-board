@@ -15,11 +15,24 @@ def utc_now_iso() -> str:
 @contextmanager
 def get_db():
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_FILE)
+    conn = sqlite3.connect(
+        DB_FILE,
+        timeout=30,
+        isolation_level=None,
+    )
     conn.row_factory = sqlite3.Row
+
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout = 30000")
+    conn.execute("PRAGMA foreign_keys = ON")
+
     try:
+        conn.execute("BEGIN")
         yield conn
         conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
@@ -258,7 +271,6 @@ def has_recent_or_active_enrichment_job(
             (
                 JOB_ENRICH_MISSING_POST_METRICS,
                 target,
-                cutoff,
             ),
         ).fetchone()
     
@@ -474,8 +486,19 @@ def queue_missing_reel_classification_jobs(
     """
     Queue classification jobs for reels that have not been visually classified yet.
     """
-    limit = int(limit or 25)
-    limit = max(1, min(limit, 100))
+    limit = int(limit or 0)
+
+    if limit <= 0:
+        return {
+            "ok": True,
+            "found": 0,
+            "queued": 0,
+            "limit": limit,
+            "fps": fps,
+            "reason": "classification_disabled",
+        }
+
+    limit = min(limit, 100)
 
     with get_db() as conn:
         rows = conn.execute(
